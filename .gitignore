@@ -2,9 +2,6 @@
 .Rhistory
 .Rapp.history
 
-# Session Data files
-.RData
-
 # User-specific files
 .Ruserdata
 
@@ -37,3 +34,6 @@ vignettes/*.pdf
 
 # R Environment Variables
 .Renviron
+
+# Course exercise folders
+[1-5].*/
