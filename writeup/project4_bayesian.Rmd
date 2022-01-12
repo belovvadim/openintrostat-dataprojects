@@ -1,0 +1,647 @@
+---
+title: "Bayesian Model Averaging for Movie Scores"
+subtitle: "\"Bayesian Statistics\" Project"
+author: "Vadim Belov"
+output: 
+  html_document: 
+    code_folding: show
+    toc: true
+    toc_depth: 3
+    highlight: pygments
+    theme: spacelab
+---
+
+## Setup
+
+```{css, echo=FALSE}
+pre {
+  max-height: 430px;
+  overflow-y: auto;
+}
+```
+
+```{r setup, echo = FALSE}
+knitr::opts_chunk$set(
+  fig.width = 11,
+  fig.asp = 0.618,
+  out.width = "90%",
+  fig.align = "center",
+  knitr.table.align = "r"
+)
+ggplot2::theme_update(
+  plot.title = ggplot2::element_text(hjust = 0.5, face = "bold")
+)
+```
+
+Some code chunks are hidden by default (mostly for plots), but you can easily unfold them, by clicking on the "code" tab.
+
+### Task
+
+Transform variables according to guidelines, describe dataset and perform EDA. Develop a Bayesian regression model to predict `audience_score` from the selected variables. Make a prediction for a previously unseen data (cf. [project requirements](requirements/info4_bayesian)).
+
+### Load packages
+
+```{r load-packages, message = FALSE}
+library(ggplot2)    # graphics
+library(gridExtra)  # multiple side-by-side ggplot's
+library(GGally)     # pairwise correlation plots
+library(dplyr)      # data manipulation
+library(tidyr)      # data cleaning and representation change
+library(BAS)        # Bayesian Variable Selection and Model Averaging
+```
+
+### Load data
+
+```{r load-data}
+load("data/movies.Rdata")
+```
+
+* * *
+
+## Part 1: Data
+
+The data set is comprised of 651 randomly sampled movies, produced and released before 2016. The information on the movies has been gathered, in particular, from [Rotten Tomatoes](https://www.rottentomatoes.com/) and [IMDB](https://www.imdb.com/).
+
+**Generalizability:** Random sampling implies that the results of analysis, derived from these data, can be generalized to the population of interest (movies released before 2016). 
+
+**Causality**: Since no random assignment has been employed, this study is purely *observational* in nature and does not guarantee causal inferences. Strictly speaking, one can only identify the possible association between variables (but not necessarily the causal dependencies), using variation in the collected data samples. 
+
+There are not enough details on the data collection to judge about the possible sources of biases. The quality and fullness of the database is crucial here, as only the movies which have a record are available for the study.
+
+In general, we are interested in learning what attributes make a movie popular. **The specific task** is as follows: Develop a Bayesian regression model to predict `audience_score` from certain explanatory variables.
+
+
+* * *
+
+## Part 2: Data manipulation
+
+We construct the design matrix to include only relevant target variable and all potentially useful predictors, that will be considered for the model. Therefore, we can safely omit dummy variables (like title or URL) and those clearly useless for prediction (such as actor or director), that cannot be generalized to the population.
+
+variable | description
+:------- | :------------------
+`feature_film`     | "yes" if title_type is Feature Film, "no" otherwise
+`drama`            | "yes" if genre is Drama, "no" otherwise
+`runtime`          | Runtime of movie (in minutes)
+`mpaa_rating_R`    | "yes" if mpaa_rating is R, "no" otherwise
+`thtr_rel_year`    | Year the movie is released in theaters
+`oscar_season`     | "yes" if movie is released in November, October, or December, "no" otherwise
+`summer_season`    | "yes" if movie is released in May, June, July, or August, "no" otherwise
+`imdb_rating`      | Rating on IMDB, between [1,10]
+`imdb_num_votes`   | Number of votes on IMDB
+`critics_score`    | Critics score on Rotten Tomatoes
+`best_pic_nom`     | Whether or not the movie was nominated for a best picture Oscar (no, yes)
+`best_pic_win`     | Whether or not the movie won a best picture Oscar (no, yes)
+`best_actor_win`   | Whether or not one of the main actors in the movie ever won an Oscar (no, yes)
+`best_actress_win` | Whether or not one of the main actresses in the movie ever won an Oscar (no, yes)
+`best_dir_win`     | Whether or not the director of the movie ever won an Oscar (no, yes)
+`top200_box`       | Whether or not the movie is in the Top 200 Box Office list on BoxOfficeMojo (no, yes)
+
+We have to turn some of the original categorical predictors with multiple levels (`title_type`, `genre`, `mpaa_rating`, and also `thtr_rel_month`) into simple binary variables:
+
+```{r}
+design <- select(movies,
+  audience_score, critics_score, imdb_rating, imdb_num_votes, runtime, thtr_rel_year, thtr_rel_month,
+  title_type, genre, mpaa_rating, best_pic_nom:top200_box
+) %>% mutate(
+  feature_film = as.factor( ifelse(title_type == "Feature Film", "yes", "no") ),
+  drama = as.factor( ifelse(genre == "Drama", "yes", "no") ),
+  mpaa_rating_R = as.factor( ifelse(mpaa_rating == "R", "yes", "no") ),
+  oscar_season = as.factor( ifelse(thtr_rel_month %in% 10:12, "yes", "no") ),
+  summer_season = as.factor( ifelse(thtr_rel_month %in% 5:8, "yes", "no") ),
+  .keep = "unused"
+)
+glimpse(design)
+```
+
+### Missing Values
+
+Lets take care of missing values that we may have in our data.
+
+```{r}
+design %>% tibble::rownames_to_column() %>% 
+  filter( ! complete.cases(.)) %>% 
+  select( rowname | which(colSums(is.na(.)) > 0) ) %>% 
+  knitr::kable()
+```
+\
+There can be no movie without runtime. In fact, we can look up information on the corresponding webpage and manually correct this erroneous data entry.
+
+```{r}
+design[334, "runtime"] = movies[334, "runtime"] <- 74
+```
+
+
+* * *
+
+## Part 3: Exploratory data analysis
+
+Lets explore the relationship between `audience_score` and predictor variables constructed in the previous part.
+
+
+### Numerical Predictors
+
+Check first the pairwise associations of numeric predictors with response and among each other.
+```{r pairwise-numeric, fig.asp = 1, class.source = "fold-hide", warning = FALSE}
+ggpairs(
+  data = select_if(design, is.numeric), 
+  lower = list(continuous = wrap("points", alpha = 0.5, size = 1))
+) +
+  theme(
+    axis.text.x = element_text(angle = -90, hjust = 0, vjust = 0),
+    text = element_text(size = 8),
+    plot.title = element_text(size = 14)
+  ) +
+  labs(title = "Pairwise Correlations of Numerical Variables")
+```
+\
+The correlations are high between `imdb_rating`, `audience_score` and `critics_score`. This is expected, since audience scores at IMDB and RT, basically, represent similar information (movie's popularity). However, the individual correlations do not provide much information for inference, since what we are interested in are *conditional (in)dependencies* between variables (addressed by regression).
+
+Upon inspection, the IMDB Rating totally dominates predictions of the linear model, *whatever other variables are also included*. This can be seen on the following plots, comparing `imdb_rating` as a sole predictor with the full model fit:
+
+```{r IMDB-vs-Full, fig.asp = 1, class.source = "fold-hide"}
+model_imdb <- lm(audience_score ~ imdb_rating, data = design)
+model_full <- lm(audience_score ~ ., data = design)
+predicted_imdb <- ggplot(broom::augment(model_imdb), aes(x = .fitted, y = audience_score)) + 
+  geom_point(shape = 16, size = 2, alpha = 0.7) + 
+  geom_abline(slope = 1, intercept = 0, size = 1, linetype = "dashed") +
+  geom_smooth(formula = y ~ x, method = "loess") +
+  labs(x = "Fitted Values", y = "Audience Score", title = "IMDB Rating Fit")
+predicted_full <- ggplot(broom::augment(model_full), aes(x = .fitted, y = audience_score)) + 
+  geom_point(shape = 16, size = 2, alpha = 0.7) + 
+  geom_abline(slope = 1, intercept = 0, size = 1, linetype = "dashed") +
+  geom_smooth(formula = y ~ x, method = "loess") +
+  labs(x = "Fitted Values", y = "Audience Score", title = "Full Model Fit")
+imdb_full <- ggplot(data.frame(imdb_fit = model_imdb$fitted, full_fit = model_full$fitted),
+                    aes(x = imdb_fit, y = full_fit)) + 
+  geom_point(shape = 16, size = 2, alpha = 0.7) + 
+  geom_abline(slope = 1, intercept = 0, size = 1, linetype = "dashed") +
+  geom_smooth(formula = y ~ x, method = "loess") +
+  annotate(
+    "text", x = 44, y = 70,
+    label = paste("Corr:", round(cor(model_imdb$fitted, model_full$fitted), digits = 3))
+  ) +
+  labs(x = "IMDB Fit", y = "Full Model Fit", title = "Full Model vs. IMDB Prediction")
+grid.arrange(predicted_imdb, predicted_full, imdb_full, layout_matrix = rbind(c(1,2), c(3)) )
+```
+\
+The scatter of residuals around the null (diagonal line on the first two plots) displays some non-constant variance and a clear trend, thus, violating conditions of the linear regression. While the distribution of `audiance_score` has a pronounced 2nd hump around 50, the shape of `imdb_rating` is more-or-less unimodal, what partially can explain an underestimate in that region. It turns out that the fit will be much better (and let me add, "more interesting"), if one removes `imdb_rating` from predictors.
+
+```{r}
+design <- select(design, -imdb_rating)
+```
+\
+This is in accord with the above said about the role of this redundant variable as essentially encoding the same type of data as response (our target of prediction). I think, it would be a little bit awkward to "predict" the movie's score, based on the score on the other website (sampled from the same population, which is the "audience"). On the other hand, I keep the `critics_score` as predictor, since it is not uncommon for critics to rate movies differently than the audience, based on other qualities or review criteria. That is to say, assuming these scores are derived from the different population of "critics", we can ask how well they represent the audience opinion (e.g., we can see the similar bi-modal shaped distribution).
+
+
+### Linear Relationship and Variable Transformations
+
+One of prerequisites to fit linear regression model is that predictors are linearly associated with response variable, at least approximately. However, some non-linear relationships are clearly seen on scatterplots, that involve `imdb_num_votes` (and to some extent `runtime`). By applying variable transformations (the common choices are `sqrt`, `log`, `1/x`, etc.), one can make the association appear more linear. (Often times this also correct the skewness of the variable's distribution, making it more "normal-like", but this is not the goal per se.)
+
+I find it most useful to apply log-transform to `imdb_num_votes` and a reciprocal `1/runtime`. With the latter transform, however, the two lowest `runtime` values become distinct outliers of the new more symmetrical distribution. To verify this, we can perform the Rosner statistical test ($H_0: \text{value is not an outlier}$, with default significance level $\alpha = 0.05$ and the number of suspect outliers $k=3$):
+
+```{r}
+EnvStats::rosnerTest( 1 / movies$runtime )$all.stats
+```
+```{r, class.source = "fold-show"}
+movies %>% tibble::rownames_to_column() %>% 
+  filter( ! between(runtime, 60, 210) ) %>% 
+  arrange(runtime) %>% 
+  knitr::kable() %>% kableExtra::kable_styling("striped") %>% kableExtra::scroll_box(width = "100%")
+```
+\
+I choose to remove 2 very short documentaries and do not consider titles that last less than, say, 60 min. The corresponding distributions are then nearly symmetrical (and close to normality, as seen from the quantile-quantile plots below).
+```{r}
+design <- filter(design, runtime > 60) %>% 
+  mutate(
+    log_votes = log10(imdb_num_votes),
+    `1/runtime` = 1 / runtime,
+    .keep = "unused"
+  )
+```
+
+```{r scores-distribution, fig.asp = 0.8, class.source = "fold-hide"}
+scatter_votes <- ggplot(design, aes(x = log_votes, y = audience_score, col = feature_film)) + 
+  geom_point(shape = 16, size = 2, alpha = 0.5) + 
+  geom_smooth(formula = y ~ x, method = "loess") +
+  theme(legend.position = "top") +
+  labs(title = "Linear Dependence (?)", x = "Logarithm of Number of Votes on IMDB", y = "Audience Score")
+histogram_votes <- ggplot(design, aes(x = log_votes)) +
+  geom_histogram(aes(y = ..density..), binwidth = 0.5, col = "white", alpha = 0.3) +
+  geom_density(aes(col = "Data"), size = 1, fill = "mediumseagreen", alpha = 0.15) + 
+  stat_function(
+    aes(col = "Normal"), size = 1,
+    fun = dnorm, args = list(mean = mean(design$log_votes), sd = sd(design$log_votes))
+  ) +
+  scale_color_manual(NULL, values = c("seagreen", "red")) + 
+  annotate(
+    "text", x = mean(design$log_votes), y = 0.02,
+    label = paste("Skewness:", round(e1071::skewness(design$log_votes), digits = 3))
+  ) +
+  theme(legend.position = c(0.15, 0.9)) +
+  labs(title = "Histogram", x = "Logarithm of Number of Votes on IMDB", y = "Probability Density")
+qqnorm_votes <- ggplot(design, aes(sample = log_votes)) + 
+  stat_qq(size = 2, shape = 21) + stat_qq_line() +
+  labs(title = "Normal Q-Q Plot: Log of Votes", x = "Theoretical Quantiles", y = "Sample Quantiles")
+scatter_runtime <- ggplot(design, aes(x = `1/runtime`, y = audience_score, col = feature_film)) + 
+  geom_point(shape = 16, size = 2, alpha = 0.5) + 
+  geom_smooth(formula = y ~ x, method = "loess") +
+  theme(legend.position = "top") +
+  labs(title = "Linear Dependence (?)", x = "1 / Runtime", y = "Audience Score")
+histogram_runtime <- ggplot(design, aes(x = `1/runtime`)) +
+  geom_histogram(aes(y = ..density..), binwidth = 0.001, col = "white", alpha = 0.3) +
+  geom_density(aes(col = "Data"), size = 1, fill = "mediumseagreen", alpha = 0.15) + 
+  stat_function(
+    aes(col = "Normal"), size = 1,
+    fun = dnorm, args = list(mean = mean(design$`1/runtime`), sd = sd(design$`1/runtime`))
+  ) +
+  scale_color_manual(NULL, values = c("seagreen", "red")) + 
+  annotate(
+    "text", x = mean(design$`1/runtime`), y = 10,
+    label = paste("Skewness:", round(e1071::skewness(design$`1/runtime`), digits = 3))
+  ) +
+  theme(legend.position = c(0.15, 0.9)) +
+  labs(title = "Histogram", x = "1 / Runtime", y = "Probability Density")
+qqnorm_runtime <- ggplot(design, aes(sample = `1/runtime`)) + 
+  stat_qq(size = 2, shape = 21) + stat_qq_line() +
+  labs(title = "Normal Q-Q Plot: 1 / Runtime", x = "Theoretical Quantiles", y = "Sample Quantiles")
+grid.arrange(scatter_votes, histogram_votes, qqnorm_votes, 
+             scatter_runtime, histogram_runtime, qqnorm_runtime, 
+             ncol = 3)
+```
+\
+The scatterplots against the response `audience_score` are much less "wiggly" now, although still displaying some curved trend. Part of the curvature in the lower range of `log_votes` can be accounted for by conditioning on movie type, but for higher values the curve bends upwards. Note that `feature_film` == "no" category consists mostly of Documentaries, with only 5 TV Movies. Given the mutual characteristics of the above types, it could be more natural to aggregate "TV Movie" and "Feature Film" `title_type` together (rather than suggested `feature_film`).
+
+
+### Categorical Predictors
+
+Compute summary statistics of respective counts:
+```{r}
+summary( select_if(design, is.factor) )
+```
+Note that some classes are imbalanced. Also `best_pic_nom` is likely to include `best_pic_win` as subset, with only 1 exception (erroneously, "won without nomination"):
+```{r, class.source = "fold-hide"}
+filter(movies, best_pic_win == "yes" & best_pic_nom == "no") %>%
+  knitr::kable() %>% kableExtra::kable_styling("striped") %>% kableExtra::scroll_box(width = "100%")
+
+```
+\
+We can also plot our numeric response against each of the individual categorical predictors, using side-by-side boxplots.
+```{r categorical-predictors, class.source = "fold-hide", message = FALSE}
+design %>% 
+  select_if(is.factor) %>% 
+  cbind(score = design$audience_score) %>% 
+  pivot_longer(1:11, names_to = "predictor", values_to = "category") %>% 
+  ggplot(aes(x = score, y = category)) +
+  geom_boxplot() +
+  facet_wrap( ~ predictor, ncol = 4, scales = "free") +
+  labs(x = "Audience Score", y = NULL, title = "Categorical Predictors for Movie Score") +
+  theme(axis.text = element_text(size = 6))
+```
+
+From the median values and ranges overlap, we can suspect `feature_film`, `best_pic_nom` and possibly `top200_box` as potentially reliable predictors (without any additional information).
+
+* * *
+
+## Part 4: Modeling
+
+### Full Model Specification and Posteriors
+
+For Bayesian model choice, we start with the full model, which includes all the predictors. Using `BAS` package, we will fit the multiple linear regression of the form:
+$$y_i = \beta_0 + \pmb{\beta}^T(\mathbf{x}_i - \bar{\mathbf{x}}) + \epsilon_i$$
+
+Here boldface corresponds to each predictor and its coefficients $\beta_j$, index $i$ denotes observations, and $\bar{\mathbf{x}}$ is a vector of sample means. The estimate of the constant coefficient $\hat{\beta}_0 = \bar{\mathbf{y}}$ is, thus, the sample mean of the response variable. One assumes that $\epsilon_i$ is independent, and identically distributed with the Normal distribution $\epsilon_i\stackrel{\mathrm{i.i.d.}}{\sim}\mathrm{Normal}(0,\sigma^2)$.
+
+For Bayesian inference, we need to specify a prior distributions for all the coefficients $\beta_j$ (and other hyper-parameters), that reflect our uncertainty about the importance of variables. This elicitation can be quite involved, especially in our case, when we do not have enough prior information about movies, apart from the data sample itself. Therefore, we are going to adopt some vague non-informative prior, e.g., *reference prior*, which is a limiting case of the multivariate Normal-Gamma prior distribution.
+
+```{r}
+full.lm <- bas.lm(audience_score ~ ., data = design, 
+                  # as n gets large, log-likelihood is approximated by BIC, for nearly flat reference prior
+                  prior = "BIC",
+                  # include all variables of the full model, having prior model probability exactly one
+                  modelprior = Bernoulli(1), include.always = ~ ., n.models = 1)
+full.coef <- coef(full.lm)
+```
+
+For a single model fit, one updates the coefficients based on the data, resulting in *posterior distributions* for each of them (plus intercept):
+```{r, fig.asp = 0.8}
+par(mfrow = c(4, 4), col.lab = "darkgrey", col.axis = "darkgrey", col = "darkgrey")
+plot(full.coef, ask = FALSE)
+```
+
+We see that several 95% credible intervals of coefficients (coinciding with OLS confidence intervals, when using reference prior) contain zero, suggesting that a sparse model without those variables may be more accurate.
+```{r}
+round(confint(full.coef, parm = 2:full.coef$n.vars), 3)
+```
+\
+Overall, for $p=16$ variables we have $2^p=65536$ possible subset models to consider.
+
+
+### Model Uncertainty and Averaging
+
+Going one step higher, our uncertainty about model choice can be represented using probability distribution over all possible models $M_j$, where each probability $p(M_j)$ provides measure of how likely is the model. We can then make inference and compute weighted averages of quantities of interest, using updated posterior probabilities:
+$$\hat{Y}^\ast = \sum_{j=1}^{2^p}\hat{Y}^\ast_j \, p(M_j|\mathrm{data}), \qquad\qquad p(\Delta|\mathrm{data}) = \sum_{j=1}^{2^p}p(\Delta|M_j, \mathrm{data}) \, p(M_j|\mathrm{data}), \qquad\qquad \mbox{etc.}$$
+This Bayesian Model Averaging (BMA) represents the full posterior uncertainty after seeing the data. For instance, using uniform prior, that treats all models as equally likely (and reference prior on coefficients), the 4 most likely models are as follows:
+```{r}
+movies.BIC <- bas.lm(audience_score ~ ., data = design,
+                     prior = "BIC", modelprior = uniform(), 
+                     method = "MCMC", MCMC.iterations = 10 ^ 7)
+round(summary(movies.BIC, n.models = 4), 3)
+```
+\
+The second column contains posterior inclusion probabilities $p(\beta_j\neq0)$, that represent importance of different predictors, as can be seen on the following graph:
+```{r}
+plot(movies.BIC, which = 4, ask = FALSE, caption = "", sub.caption = "", 
+     col.in = "blue", col.ex = "darkgrey", lwd = 3, cex = 0.55, 
+     main = "Importance of Coefficients Under BMA")
+```
+\
+PIPs turn out to be rather similar for the whole range of common coefficient priors (BIC, g-prior, JZS, hyper-g-n, EB-local), except for AIC, that invariably results in much higher estimates. 
+
+```{r}
+# Find posterior inclusion probabilities for a range of priors (with adjusted hyper-parameters)
+pips <- mapply(
+  FUN = function(p, a) {
+    model <- bas.lm(audience_score ~ ., data = design, prior = p, alpha = a, modelprior = uniform())
+    return( model$probne0 )
+  },
+  p = list(BIC = "BIC", g = "g-prior",  ZS = "JZS", HG = "hyper-g-n", EB = "EB-local", AIC = "AIC"), 
+  a = list(NULL, nrow(design), NULL, 3, nrow(design), NULL)
+)
+rownames(pips) <- movies.BIC$namesx
+# Plot the calculated pips
+as.data.frame(pips) %>% 
+  tibble::rownames_to_column(var = "predictor") %>% 
+  pivot_longer(2:7, names_to = "prior", values_to = "pip") %>% 
+  ggplot(aes(x = reorder(prior, pip), y = pip)) +
+  geom_bar(stat = "identity", fill = "deepskyblue") +
+  facet_wrap( ~ factor(predictor, levels = movies.BIC$namesx), ncol = 4, scales = "free") +
+  labs(x = "Priors", y = NULL, title = "Posterior Inclusion Probabilities Using Different Priors")
+```
+
+**I choose to continue with the BIC prior** as a fairly conservative approach. Using model `PostProbs` from the summary above to calculate Bayes factors, one can compare relative plausibility of different models. The resulting model space and content is visualized graphically, where each color corresponds to the log posterior odds (over the null model):
+```{r}
+image(movies.BIC, cex.axis = 0.8, rotate = FALSE)
+```
+\
+Since we have different models to choose from under the Bayesian framework, we need to first specify which particular model we use to obtain the prediction. Under the BMA scheme, we have a hierarchical model, composed of many simpler models as building blocks. The posterior predictive mean by using the weighted average is the best w.r.t. the squared error loss, but the BMA model itself is not easy to interpret.
+
+How to select a single model from the posterior distribution and use it for future inference? The common choices are the Highest Probability Model (optimal w.r.t. 0-1 loss), Median Probability Model (pips > 0.5), and the Best Predictive Model (whose predictions are closest to BMA). In our case, all three options result in a single best model (under the BIC prior), for instance:
+
+
+```{r}
+coef.HPM <- coef(movies.BIC, estimator = "HPM")
+round(confint(coef.HPM), 3)
+```
+\
+The posterior probability of the model (against the prior $1/2^p$):
+```{r}
+hpm <- which.max(movies.BIC$postprobs)
+round(movies.BIC$postprobs[[hpm]], 3)
+```
+
+### Model Interpretation and Diagnostics
+
+Recall that the `BAS` fits the linear model with all predictors centered at their sample average values:
+```{r, class.source = "fold-hide"}
+summarize(design,
+  avg_feature_film.yes = mean(feature_film == "yes"),
+  avg_drama.yes = mean(drama == "yes"),
+  avg_critics_score = mean(critics_score),
+  avg_thtr_rel_year = mean(thtr_rel_year),
+  avg_log_votes = mean(log_votes)
+) %>% mutate(
+  `10^avg_log_votes` = 10 ^ avg_log_votes
+) %>% round(., 2) %>% 
+  knitr::kable() %>% kableExtra::kable_styling("striped")
+```
+
+The selected model then has the following form:
+$$ \widehat{\texttt{audience_score}} =  62.3 - 17.9 \times (\texttt{feature_film}_\mathrm{yes}^\phantom{1} - 0.91) + 3.8 \times (\texttt{drama}_\mathrm{yes}^\phantom{1} - 0.47) + \\  0.42 \times (\texttt{critics_score} - 57.6) - 0.17 \times (\texttt{thtr_rel_year} - 1998) + 7.2 \times \log_{10} \left(\frac{\texttt{imdb_num_votes}}{16568}\right)$$
+The 95% credible intervals of coefficient estimates coincide with the frequentist confidence intervals, when using reference prior (BIC approach). The only difference is the **interpretation**. For example, based on the data, we believe that there is a 95% chance that the audience score on Rotter Tomatoes will increase *on average* by 3.7 up to 4.6 for every additional 10 points of critics' score, or that it will be higher from 0.7 to 2.7 percent points for every 10 years passed since release in theaters, *all else being equal*. Further, it is 95% likely that the average movie score will be higher by 5.4 up to 8.9 points for every *10 times* increase in number of votes (using the property $\log(xy)=\log(x) + \log(y)$), if everything else is held fixed. Finally, we expect with the probability of 95% that the average movie score will be about 17.9 lower (from 13 to 22.7) if it is a Feature Film, and approximately 3.8 points higher (between 1.6 and 6.1) if it is Drama, respectively.
+
+Before we perform the necessary **diagnostics** of our model, lets first check that the MCMC sampler method for BMA has properly converged.
+```{r}
+par(mfrow = c(1,2))
+diagnostics(movies.BIC, type = c("pip", "model"), col = "blue", pch = 16, cex = 1.5)
+```
+\
+The application of multiple linear regression methods generally depends on the set of conditions, that we can verify by analyzing residuals. To construct diagnostic plots, lets first augment our data matrix with predictions of the HPM model and corresponding residuals. (The usually helpful function `broom::augment()` is not available for `bas` object.)
+
+```{r}
+movies.HPM <- predict(movies.BIC, estimator = "HPM")
+movies.BMA <- predict(movies.BIC, estimator = "BMA")
+design_aug <- mutate(design,
+  bma.fit = movies.BMA$fit,  # for comparison with HPM
+  hpm.fit = movies.HPM$fit,
+  hpm.resid = audience_score - hpm.fit
+)
+```
+
+```{r, fig.asp = 1, class.source = "fold-hide"}
+resid_hist <- ggplot(design_aug, aes(x = hpm.resid)) +
+  geom_histogram(aes(y = ..density..), binwidth = 5, col = "white", alpha = 0.3) +
+  geom_density(aes(col = "Data"), size = 1, fill = "mediumseagreen", alpha = 0.15) + 
+  stat_function(
+    aes(col = "Normal"), size = 1,
+    fun = dnorm, args = list(mean = mean(design_aug$hpm.resid), sd = sd(design_aug$hpm.resid))
+  ) +
+  scale_color_manual(NULL, values = c("seagreen", "red")) + 
+  annotate(
+    "text", x = mean(design_aug$hpm.resid), y = 0.001,
+    label = paste("Kurtosis:", round(e1071::kurtosis(design_aug$hpm.resid), digits = 3))
+  ) +
+  theme(legend.position = c(0.15, 0.9)) +
+  labs(title = "Histogram", x = "Residuals", y = "Probability Density")
+resid_qqnorm <- ggplot(design_aug, aes(sample = hpm.resid)) + 
+  stat_qq(size = 2, shape = 21) + stat_qq_line() +
+  labs(title = "Normal Q-Q Plot for Residuals", x = "Theoretical Quantiles", y = "Sample Quantiles")
+resid_fitted <- ggplot(design_aug, aes(x = hpm.fit, y = abs(hpm.resid))) +
+  geom_point(shape = 16, size = 2, alpha = 0.5) +
+  geom_smooth(formula = y ~ x, method = "loess") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(title = "Residuals vs. Fitted", x = "Fitted Values", y = "Absolute Values of Residuals")
+resid_order <- ggplot(design_aug, aes(x = 1:length(hpm.resid), y = hpm.resid)) +
+  geom_point(shape = 21, size = 2) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(title = "Residual Independence", x = "Order of Collection", y = "Residuals")
+grid.arrange(resid_hist, resid_qqnorm, resid_fitted, resid_order, ncol = 2, nrow = 2)
+```
+\
+1. The *residuals are nearly normal* around 0. They are slightly over-dispersed with thick tails (positive excess kurtosis, corresponding to flipped S-shape on the QQ-plot), but deviations from normality are negligibly small (especially for large data sets like ours, $n=649$).
+2. The *variability of the residuals is somewhat problematic* (heteroscedasticity), as can be seen from the absolute values of residuals, plotted against fitted values. The scatter is a little bit higher for lower values, predicted by the model.We will return to this issue shortly.
+3. The apparent randomness of residuals w.r.t. order of collection implies that they are *independent*, coming from a random sample.
+4. Each variable should be *linearly related* to the outcome, as we already discussed in the EDA section on the variable transformation. We can additionally check linearity assumption, by plotting model residuals against each numeric predictor (even `runtime`, for completeness).
+
+```{r, class.source = "fold-hide"}
+resid_critics <- ggplot(design_aug, aes(x = critics_score, y = hpm.resid)) + 
+  geom_point(shape = 16, size = 2, alpha = 0.5) + 
+  geom_smooth(formula = y ~ x, method = "loess") +
+  labs(x = "Critics Score", y = NULL)
+resid_year <- ggplot(design_aug, aes(x = thtr_rel_year, y = hpm.resid)) + 
+  geom_point(shape = 16, size = 2, alpha = 0.5) + 
+  geom_smooth(formula = y ~ x, method = "loess") +
+  labs(x = "Year of Release in Theater", y = NULL)
+resid_votes <- ggplot(design_aug, aes(x = log_votes, y = hpm.resid)) + 
+  geom_point(shape = 16, size = 2, alpha = 0.5) + 
+  geom_smooth(formula = y ~ x, method = "loess") +
+  labs(x = "Logarithm of Number of Votes on IMDB", y = NULL)
+resid_runtime <- ggplot(design_aug, aes(x =`1/runtime`, y = hpm.resid)) + 
+  geom_point(shape = 16, size = 2, alpha = 0.5) + 
+  geom_smooth(formula = y ~ x, method = "loess") +
+  labs(x = "1 / Runtime", y = NULL)
+grid.arrange(
+  resid_critics, resid_votes, resid_year, resid_runtime, ncol = 2,
+  top = grid::textGrob(
+    "Linearity Assumption: Residuals vs. Predictors", gp = grid::gpar(fontsize = 14, fontface = "bold")
+  )
+)
+```
+\
+Finally, in order to visually assess the accuracy of predictions, we plot the actual IMDB scores against fitted values (with diagonal and local regression lines on top, to see any patterns). One can additionally compare predictions of our best model (HPM = MPM = BPM) and hierarchical BMA model to see that they are in perfect agreement. 
+
+```{r, class.source = "fold-hide"}
+actual_predict <- ggplot(design_aug, aes(x = hpm.fit, y = audience_score)) + 
+  geom_point(aes(color = abs(audience_score - hpm.fit) < 25), shape = 16, size = 2, alpha = 0.7) + 
+  geom_abline(slope = 1, intercept = 0, size = 1, linetype = "dashed") +
+  geom_smooth(formula = y ~ x, method = "loess") +
+  theme(legend.position = "top") + 
+  labs(x = "HPM Fitted Values", y = "Audience Score", title = "Actual vs. Predicted")
+BMA_HPM <- ggplot(design_aug, aes(x = hpm.fit, y = bma.fit)) + 
+  geom_point(shape = 16, size = 2, alpha = 0.7) + 
+  geom_abline(slope = 1, intercept = 0, size = 1, linetype = "dashed") +
+  geom_smooth(formula = y ~ x, method = "loess") +
+  annotate(
+    "text", x = 55, y = 75,
+    label = paste("Corr:", round(cor(design_aug$bma.fit, design_aug$hpm.fit), digits = 3))
+  ) +
+  labs(x = "HPM Fit", y = "BMA Fit", title = "BMA vs. HPM Prediction")
+grid.arrange(actual_predict, BMA_HPM, ncol = 2)
+```
+
+
+* * *
+
+## Part 5: Prediction
+
+Usually, the good practice is to split data into "training" and "test" subsets, and to use the second one for validation of the accuracy of predictions on the data, not used for the model fitting. Instead, the computation of BIC imposes some penalty on the number of variables to compensate for possible over-fitting (another way is cross-validation). Lets check how our model performs on some out-of-sample observations. We pick a movie from 2016 (and a handful of others not in the original dataset), with information gathered from [Rotten Tomatoes](https://www.rottentomatoes.com/) and [IMDB](https://www.imdb.com/):
+
+```{r new-data, echo = FALSE}
+new_data <- tibble(
+  title           = c("The Conjuring 2", "Pleasantville", "Forrest Gump", "Ferris Bueller's Day Off", 
+                      "Crank", "Prince of Darkness", "Religulous", "Metal: A Headbanger's Journey",
+                      "Catwoman"),
+  title_type      = c("Feature Film", "Feature Film", "Feature Film", "Feature Film", 
+                      "Feature Film", "Feature Film", "Documentary", "Documentary", "Feature Film"),
+  genre           = c("Horror", "Comedy", "Drama", "Comedy", 
+                      "Action & Adventure", "Horror", "Documentary", "Documentary",
+                      "Action & Adventure"),
+  runtime         = c(134, 124, 142, 103, 83, 102, 101, 96, 104),
+  mpaa_rating     = c("R", "PG-13", "PG-13", "PG-13", "R", "R", "R", "R", "PG-13"),
+  thtr_rel_year   = c(2016, 1998, 1994, 1986, 2006, 1987, 2008, 2005, 2004),
+  thtr_rel_month  = c(6, 10, 7, 6, 9, 10, 10, 6, 7),
+  imdb_rating     = c(7.3, 7.5, 8.8, 7.8, 6.9, 6.7, 7.6, 8.1, 3.4),
+  imdb_num_votes  = c(247809, 124997, 1904201, 335380, 241402, 40033, 58537, 11950, 114846),
+  critics_rating  = c("Certified Fresh", "Certified Fresh", "Fresh", "Certified Fresh", 
+                      "Fresh", "Rotten", "Fresh", "Fresh", "Rotten"),
+  critics_score   = c(80, 85, 71, 80, 61, 58, 69, 90, 9),
+  audience_rating = c("Upright", "Upright", "Upright", "Upright", "Upright", "Upright", "Upright", "Upright",
+                      "Spilled"),
+  audience_score  = c(81, 79, 95, 92, 71, 60, 78, 91, 18),
+  best_pic_nom    = c("no", "no", "yes", "no", "no", "no", "no", "no", "no"), 
+  best_pic_win    = c("no", "no", "yes", "no", "no", "no", "no", "no", "no"), 
+  best_dir_win    = c("no", "no", "yes", "no", "no", "no", "no", "no", "no"), 
+  best_actor_win  = c("no", "no", "yes", "no", "no", "no", "no", "no", "no"),
+  best_actress_win= c("no", "no", "no", "no", "no", "yes", "no", "no", "yes"),
+  top200_box      = c("no", "no", "yes", "no", "no", "no", "no", "no", "no"),
+  imdb_url        = c("https://www.imdb.com/title/tt3065204/?ref_=nv_sr_srsg_0",    
+                      "https://www.imdb.com/title/tt0120789/?ref_=ttspec_ql", 
+                      "https://www.imdb.com/title/tt0109830/?ref_=nv_sr_srsg_0",
+                      "https://www.imdb.com/title/tt0091042/?ref_=nv_sr_srsg_0",
+                      "https://www.imdb.com/title/tt0479884/?ref_=nv_sr_srsg_0",
+                      "https://www.imdb.com/title/tt0093777/?ref_=nv_sr_srsg_0",
+                      "https://www.imdb.com/title/tt0815241/?ref_=nv_sr_srsg_0",
+                      "https://www.imdb.com/title/tt0478209/?ref_=nv_sr_srsg_0",
+                      "https://www.imdb.com/title/tt0327554/?ref_=adv_li_tt"),
+  rt_url          = c("https://www.rottentomatoes.com/m/the_conjuring_2", 
+                      "https://www.rottentomatoes.com/m/pleasantville",
+                      "https://www.rottentomatoes.com/m/forrest_gump",
+                      "https://www.rottentomatoes.com/m/ferris_buellers_day_off",
+                      "https://www.rottentomatoes.com/m/crank",
+                      "https://www.rottentomatoes.com/m/prince_of_darkness",
+                      "https://www.rottentomatoes.com/m/religulous",
+                      "https://www.rottentomatoes.com/m/metal_a_headbangers_journey",
+                      "https://www.rottentomatoes.com/m/catwoman")
+) %>% mutate(
+  log_votes = log10(imdb_num_votes),
+  `1/runtime` = 1 / runtime, 
+  feature_film = as.factor( ifelse(title_type == "Feature Film", "yes", "no") ),
+  drama = as.factor( ifelse(genre == "Drama", "yes", "no") ),
+  mpaa_rating_R = as.factor( ifelse(mpaa_rating == "R", "yes", "no") ),
+  oscar_season = as.factor( ifelse(thtr_rel_month %in% 10:12, "yes", "no") ),
+  summer_season = as.factor( ifelse(thtr_rel_month %in% 5:8, "yes", "no") )
+)
+```
+
+```{r new-data-print}
+knitr::kable(new_data) %>%
+  kableExtra::kable_styling("striped") %>% kableExtra::scroll_box(width = "100%")
+```
+\
+Using developed model, perform a prediction of `audience_score` with the corresponding intervals.
+
+```{r}
+pred.HPM <- predict(movies.BIC, newdata = new_data, estimator = "HPM",
+                    se.fit = TRUE, nsim = 10000)
+# Show the combined results, comparing actual and predicted values
+as.data.frame( cbind( confint(pred.HPM, parm = "pred") ) ) %>% round(0) %>% 
+  mutate(
+    title = new_data$title,
+    audience_score = new_data$audience_score,
+    .before = 1
+  ) %>% mutate(
+    `lwr < actual < upr` =  `2.5%` < audience_score & audience_score < `97.5%`
+  ) %>%
+  knitr::kable() %>% kableExtra::kable_styling("striped") 
+```
+\
+Although new data is not randomly sampled, I tried different movies in terms of score, genre, time period, etc. The last columns display lower and upper boundaries of prediction interval, as well whether it managed to capture the true value of `audience_score` in each case. *What is Bayesian prediction interval for actual movie scores, and how does it differ from credible intervals, encountered earlier?*
+
+Assuming that the data is generated from the population distribution:
+$$\text{score}_i \sim \mathrm{Normal}(\mu_i,\sigma)$$
+where $\mu_i$ is given by our linear regression formula, there are two types of uncertainties. The first one, surrounding average values over a large number of movies, is related to our ignorance about the exact details of the model. For the linear regression, using certain set of predictor variables, it is embodied in posterior probability distribution of the coefficients $\beta_j$, quantifying our knowledge of their "true" values (e.g., using credible intervals). 
+
+However, the Gaussian model of scores expects observed heights to be distributed around $\mu$, not right on top of it, with the spread  governed by $\sigma$. For every unique combination of predictors' values $x$ of interest (such as certain `thtr_rel_year`, `critics_score`, etc.), one samples from the Normal distribution with the correct values of $\mu_i(x), \sigma$, which are themselves sampled from the posterior. The prediction interval incorporates both the posterior uncertainty of the model, *as well as* variability related to the data generating process. It thus quantifies how much an individual point will differ from the population regression plane, and it is always wider than the credible interval.
+
+It seems our model performs not so bad, but the wide intervals signify about large uncertainty of our very simple model. There is a plenty room for improvement!
+
+
+* * *
+
+## Part 6: Conclusion
+
+We have performed the Bayesian regression, fitting a linear model with the given set of features to predict the audience score of the movies on Rotten Tomatoes. However, I have forcefully excluded IMDB movie ratings from consideration, since they represent redundant information with the response, and thus un-interesting for the prediction task. It also turns out that the model works better without `imdb_rating`.
+
+I have performed the model selection, using `BAS` package, where models can be ranked and weighted according to posterior probability distribution using data, that is, in an essentially Bayesian way. After trying several different priors (vague, non-informative) for linear regression coefficients, the single best model is found under  the flat reference prior (BIC), according to Highest Probability (optimal w.r.t. $L_0$), Median Probability (all $p(\beta_j) > 0.5$) and Best Predictive Model criteria. I have verified that it indeed gives the same predictions as the hierarchical Bayesian Model Averaging scheme (optimal w.r.t. $L_2$).
+
+Unfortunately, the model is likely too much simplistic and requires further improvements. This can be seen in the somewhat larger variability of model predictions in the middle and lower range of fitted values. It is always good to look at the problematic observations (highlighted in red on the `Actual vs. Predicted` scatterplot), where the model does not perform well. There are underestimates:
+
+```{r, class.source = "fold-hide"}
+# Underestimates
+filter(movies, runtime > 60)[design_aug$audience_score - design_aug$hpm.fit > 25, ] %>% 
+  arrange(audience_score) %>% 
+  select(-c(runtime, studio, thtr_rel_month:dvd_rel_day, best_pic_nom:actor5)) %>% 
+  knitr::kable() %>% 
+  kableExtra::kable_styling("striped") %>% kableExtra::scroll_box(width = "100%", height = "400px")
+```
+\
+One can see that almost all the movies are voted "Upright" by the audience, but have "Rotten" rating from critics. The possible explanation is that our model "relies too much" on `critics_score` here. One can also view movies, that have been grossly overestimated:
+```{r, class.source = "fold-hide"}
+# Overestimates
+filter(movies, runtime > 60)[design_aug$hpm.fit - design_aug$audience_score > 25, ] %>% 
+  arrange(desc(audience_score)) %>% 
+  select(-c(runtime, studio, thtr_rel_month:dvd_rel_day, best_pic_nom:actor5)) %>% 
+  knitr::kable() %>% 
+  kableExtra::kable_styling("striped") %>% kableExtra::scroll_box(width = "100%", height = "400px")
+```
+\
+I do not see any clear pattern in these examples. In any case, a good idea could be to search for some other good predictor variables to help us to categorize movies in a meaningful way. This could require collecting more data about the movies.

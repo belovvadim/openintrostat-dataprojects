@@ -1,0 +1,1250 @@
+---
+title: "Predicting House Prices in Ames, Iowa"
+subtitle: "\"Statistics with R\" Capstone Project"
+author: "Vadim Belov"
+output:
+  html_document: 
+    code_folding: show
+    toc: true
+    toc_depth: 3
+    highlight: pygments
+    theme: spacelab
+---
+
+```{css, echo = FALSE}
+pre {
+  max-height: 250px;
+  overflow-y: auto;
+}
+
+pre[class] {
+  max-height: 100%;
+}
+```
+
+# Setup
+
+```{r setup, echo = FALSE}
+knitr::opts_chunk$set(
+  fig.width = 11,
+  fig.asp = 0.618,
+  out.width = "90%",
+  fig.align = "center",
+  knitr.table.align = "r"
+)
+ggplot2::theme_update(
+  plot.title = ggplot2::element_text(hjust = 0.5, face = "bold")
+)
+```
+
+## Background
+
+As a statistical consultant working for a real estate investment firm, your task is to develop a model to predict the selling price of a given home in Ames, Iowa. Your employer hopes to use this information to help assess whether the asking price of a house is higher or lower than the true value of the house. If the home is undervalued, it may be a good investment for the firm.
+
+Go through all the stages of the realistic data analysis project, following step-by-step guidelines. Answer specific questions with appropriate methods to draw correct conclusions from the data. Complete the analysis by building the predictive linear model and evaluating in on out-of-sample observations. See the [project description](requirements/info5_capstone.md) for more details.
+
+
+## Training Data and relevant packages
+
+In order to better assess the quality of the model you will produce, the data have been randomly divided into three separate pieces: a training data set, a testing data set, and a validation data set. For now we will load the training data set, the others will be loaded and used later.
+
+```{r load, message = FALSE}
+load("data/ames_train.Rdata")
+```
+
+Use the code block below to load any necessary packages
+
+```{r packages, message = FALSE}
+library(ggplot2)    # graphics
+library(gridExtra)  # multiple side-by-side ggplot's
+library(dotwhisker) # whiscker plots
+library(dplyr)      # data manipulation
+library(tidyr)      # data cleaning and representation change
+library(forcats)    # for manipulating factors
+library(BAS)        # Bayesian Variable Selection and Model Averaging
+library(boot)       # Bootstrap Resampling
+library(TOSTER)     # equivalence testing
+library(knitr)      # report generation
+library(kableExtra) # cutomized tables
+```
+
+```{r plot.bas, echo = FALSE}
+plot.bas <- function (x, which = c(1:4), caption = c("Residuals vs Fitted", 
+    "Model Probabilities", "Model Complexity", "Inclusion Probabilities"), 
+    panel = if (add.smooth) panel.smooth else points, sub.caption = NULL, 
+    main = "", ask = prod(par("mfcol")) < length(which) && 
+        dev.interactive(), col.in = 2, col.ex = 1, col.pch = 1, 
+    cex.lab = 1, ..., id.n = 3, labels.id = NULL, cex.id = 0.75, 
+    add.smooth = getOption("add.smooth"), label.pos = c(4, 
+        2), subset = NULL, drop.always.included = FALSE, names = x$namesx[subset])  # add `names` arg
+{
+    if (!inherits(x, "bas")) 
+        stop("use only with \"bas\" objects")
+    if (!is.numeric(which) || any(which < 1) || any(which > 4)) 
+        stop("'which' must be in 1:4")
+    show <- rep(FALSE, 4)
+    show[which] <- TRUE
+    iid <- 1:id.n
+    if (show[1]) {
+        yhat = fitted(x, estimator = "BMA")
+        r = x$Y - yhat
+        n <- length(r)
+        if (id.n > 0) {
+            if (is.null(labels.id)) 
+                labels.id <- paste(1:n)
+            show.r <- sort.list(abs(r), decreasing = TRUE)[iid]
+        }
+    }
+    text.id <- function(x, y, ind, adj.x = TRUE) {
+        labpos <- if (adj.x) 
+            label.pos[1 + as.numeric(x > mean(range(x)))]
+        else 3
+        text(x, y, labels.id[ind], cex = cex.id, xpd = TRUE, 
+            pos = labpos, offset = 0.25)
+    }
+    if (any(show[2:3])) {
+        show.m = sort.list(x$logmarg, decreasing = TRUE)[iid]
+        label.m = paste(1:x$n.models)
+    }
+    if (is.null(sub.caption)) {
+        cal <- x$call
+        if (!is.na(m.f <- match("formula", names(cal)))) {
+            cal <- cal[c(1, m.f)]
+            names(cal)[2] <- ""
+        }
+        cc <- deparse(cal, 80)
+        nc <- nchar(cc[1])
+        abbr <- length(cc) > 1 || nc > 75
+        sub.caption <- if (abbr) 
+            paste(substr(cc[1], 1, min(75, nc)), "...")
+        else cc[1]
+    }
+    one.fig <- prod(par("mfcol")) == 1
+    if (ask) {
+        op <- par(ask = TRUE)
+        on.exit(par(op))
+    }
+    if (show[1]) {
+        ylim <- range(r, na.rm = TRUE)
+        if (id.n > 0) 
+            ylim <- extendrange(r = ylim, f = 0.08)
+        plot(yhat, r, xlab = "Predictions under BMA", ylab = "Residuals", 
+            main = main, ylim = ylim, type = "n", col = col.pch, 
+            ...)
+        panel(yhat, r, ...)
+        if (one.fig) 
+            title(sub = sub.caption, ...)
+        mtext(caption[1], 3, 0.25)
+        if (id.n > 0) {
+            y.id <- r[show.r]
+            y.id[y.id < 0] <- y.id[y.id < 0] - strheight(" ")/3
+            text.id(yhat[show.r], y.id, show.r)
+        }
+        abline(h = 0, lty = 3, col = "gray")
+    }
+    if (show[2]) {
+        cum.prob = cumsum(x$postprobs)
+        m.index = 1:x$n.models
+        ylim <- range(cum.prob, na.rm = TRUE)
+        ylim[2] <- ylim[2] + diff(ylim) * 0.075
+        plot(m.index, cum.prob, xlab = "Model Search Order", 
+            ylab = "Cumulative Probability", type = "n", 
+            col = col.pch, ...)
+        panel(m.index, cum.prob)
+        if (one.fig) 
+            title(sub = sub.caption, ...)
+        mtext(caption[2], 3, 0.25)
+    }
+    if (show[3]) {
+        logmarg = x$logmarg
+        dim = x$size
+        ylim <- range(logmarg, na.rm = TRUE)
+        plot(dim, logmarg, xlab = "Model Dimension", ylab = "log(Marginal)", 
+            main = main, ylim = ylim, col = col.pch, ...)
+        if (one.fig) 
+            title(sub = sub.caption, ...)
+        mtext(caption[3], 3, 0.25)
+        if (id.n > 0) 
+            text.id(dim[show.m], logmarg[show.m], show.m)
+    }
+    if (show[4]) {
+        if (is.null(subset)) 
+            subset = 1:x$n.vars
+        if (drop.always.included) {
+            keep = x$include.always
+            if (is.null(keep)) 
+                keep = 1
+            subset = subset[!subset %in% keep]
+            if (length(subset) == 0) 
+                stop("no models in subset to show; modify subset or drop.always.included")
+        }
+        probne0 = x$probne0[subset]
+        nvars = length(subset)
+        variables = 1:nvars
+        ylim <- c(0, 1)
+        colors = rep(0, nvars)
+        colors[probne0 > 0.5] = col.in
+        colors[probne0 <= 0.5] = col.ex
+        plot(variables, probne0, xlab = "", ylab = "Marginal Inclusion Probability", 
+            xaxt = "n", main = main, type = "h", 
+            col = colors, ylim = ylim, ...)
+        if (one.fig) 
+            title(sub = sub.caption, ...)
+        mtext(names, side = 1, line = 0.25, at = variables,  # custom `names` instead of default
+            las = 2, cex = cex.lab, ...)
+        mtext(caption[4], 3, 0.25)
+    }
+    if (!one.fig && par("oma")[3] >= 1) {
+        mtext(sub.caption, outer = TRUE, cex = 1.25)
+    }
+    invisible()
+}
+```
+
+```{r image.bas, echo = FALSE}
+image.bas <- function (x, top.models = 20, intensity = TRUE, prob = TRUE, 
+    log = TRUE, rotate = TRUE, color = "rainbow", subset = NULL, 
+    drop.always.included = FALSE, offset = 0.75, digits = 3, 
+    vlas = 2, plas = 0, rlas = 0, names = x$namesx[subset], ...)  # add `names` arg
+{
+    postprob <- x$postprobs
+    top.models <- min(top.models, x$n.models)
+    best <- order(-x$postprobs)[1:top.models]
+    postprob <- postprob[best]/sum(postprob[best])
+    which.mat <- list2matrix.which(x, best)
+    nvar <- ncol(which.mat)
+    if (is.null(subset)) 
+        subset <- 1:nvar
+    if (drop.always.included) {
+        keep <- x$include.always
+        if (is.null(keep)) 
+            keep <- 1
+        subset <- subset[!subset %in% keep]
+        if (length(subset) == 0) 
+            stop("no models in subset to show; modify subset or drop.always.included")
+    }
+    which.mat <- which.mat[, subset, drop = FALSE]
+    nvar <- ncol(which.mat)
+    namesx <- names  # custom `names` intead of default
+    scale <- postprob
+    prob.lab <- "Posterior Probability"
+    if (log) {
+        scale <- log(postprob) - min(log(postprob))
+        prob.lab <- "Log Posterior Odds"
+        zeros <- which(scale == 0)
+        nzeros <- length(zeros)
+        if (nzeros > 1) {
+            scale[zeros] <- seq(scale[zeros[1] - 1], 0, length = nzeros)/1000
+        }
+    }
+    if (intensity) 
+        which.mat <- sweep(which.mat, 1, scale + offset, "*")
+    if (rotate) 
+        scale <- rev(scale)
+    if (prob) {
+        m.scale <- cumsum(c(0, scale))
+    }
+    else {
+        m.scale <- seq(0, top.models)
+    }
+    mat <- (m.scale[-1] + m.scale[-(top.models + 1)])/2
+    colors <- switch(color, rainbow = c("black", rainbow(top.models + 
+        1, start = 0.75, end = 0.05)), blackandwhite = gray(seq(0, 
+        1, length = top.models)))
+    par.old <- par()$mar
+    if (rotate) {
+        par(mar = c(6, 6, 3, 5) + 0.1)
+        image(0:nvar, mat, t(which.mat[top.models:1, , drop = FALSE]), 
+            xaxt = "n", yaxt = "n", ylab = "", 
+            xlab = "", zlim = c(0, max(which.mat)), col = colors, 
+            ...)
+        axis(2, at = mat, labels = round(scale, digits = digits), 
+            las = plas, ...)
+        axis(4, at = mat, labels = top.models:1, las = rlas, 
+            ...)
+        mtext("Model Rank", side = 4, line = 3, las = 0)
+        mtext(prob.lab, side = 2, line = 4, las = 0)
+        axis(1, at = (1:nvar - 0.5), labels = namesx, las = vlas, 
+            ...)
+    }
+    else {
+        par(mar = c(6, 8, 6, 2) + 0.1)
+        image(mat, 0:nvar, which.mat[, nvar:1, drop = FALSE], 
+            xaxt = "n", yaxt = "n", xlab = "", 
+            ylab = "", zlim = c(0, max(which.mat)), col = colors, 
+            ...)
+        axis(1, at = mat, labels = round(scale, digits = digits), 
+            las = plas, ...)
+        axis(3, at = mat, labels = 1:top.models, las = rlas, 
+            ...)
+        mtext("Model Rank", side = 3, line = 3)
+        mtext(prob.lab, side = 1, line = 4)
+        axis(2, at = (1:nvar - 0.5), labels = rev(namesx), las = vlas, 
+            ...)
+    }
+    box()
+    par(par.old)
+    invisible()
+}
+```
+
+\
+NOTE: Some code chunks are hidden by default (e.g., for fancier plots), but you can easily unfold them, by clicking on the "code" tab.
+
+# Part 1 Exploratory Data Analysis (EDA)
+
+When you first get your data, it's very tempting to immediately begin fitting models and assessing how they perform.  However, before you begin modeling, it's absolutely essential to explore the structure of the data and the relationships between the variables in the data set.
+
+Do a detailed EDA of the ames_train data set, to learn about the structure of the data and the relationships between the variables in the data set (refer to Introduction to Probability and Data, Week 2, for a reminder about EDA if needed). Your EDA should involve creating and reviewing many plots/graphs and considering the patterns and relationships you see. 
+
+After you have explored completely, submit the three graphs/plots that you found most informative during your EDA process, and briefly explain what you learned from each (why you found each informative).
+
+* * *
+
+### Data Preparation and Missing Values
+
+Lets create our design matrix by trimming the original data set, that is, consecutively getting rid of the least useful or redundant variables, leaving only potentially relevant predictors. For instance, the identifier `PID` is a dummy variable, not generalizable to the population of interest, and hence should be omitted. Before we proceed further, I first recode nominal categorical feature `MS.SubClass` as factor (see the [codebook](http://jse.amstat.org/v19n3/decock/DataDocumentation.txt) for explanation of level values), as well as some other integer variables, that are discrete ordinals with few levels. I also convert NA values of factors into explicit levels "No", where they clearly denote the "absence" category. Furthermore, the "actual" missing values of factors appear as empty category names, that I replace with NA, for ease of analysis. I apply the log-transform to numerical variables with the meaning of "footage" (like "area", but also "Lot.Frontage" linear feet).
+
+```{r}
+footage <- c("area", "X1st.Flr.SF", "X2nd.Flr.SF", "Low.Qual.Fin.SF", "Lot.Area", "Lot.Frontage",
+                    "Total.Bsmt.SF", "BsmtFin.SF.1", "BsmtFin.SF.2", "Bsmt.Unf.SF", 
+                    "Open.Porch.SF", "Enclosed.Porch", "Screen.Porch", "X3Ssn.Porch",
+                    "Garage.Area", "Mas.Vnr.Area", "Wood.Deck.SF", "Pool.Area")
+small_ordinals <- c("Garage.Cars", "Fireplaces", "Bedroom.AbvGr", "Kitchen.AbvGr", 
+                    "Full.Bath", "Bsmt.Full.Bath", "Half.Bath", "Bsmt.Half.Bath")
+prepare_data <- function(
+  data, normal_sale = FALSE, log_transform = footage, to_factor = "MS.SubClass", remove = "PID"
+) {
+  if (normal_sale) data <- data %>% filter(Sale.Condition == "Normal") %>% select(-Sale.Condition)
+  transformed <- data %>% mutate(
+    # NA -> "No"
+    across(where(is.factor), function(x) fct_explicit_na(x, na_level = "No")),
+    # "No" as reference level
+    across(where(is.factor), function(x) if ("No" %in% levels(x)) relevel(x, ref = "No") else x),
+    # MS.SubClass and small ordinals -> convert to factors
+    across(all_of(to_factor), as.factor),
+    # "" -> NA, explicitly drop unused levels (with no entries)
+    across(where(is.factor), function(x) fct_drop(na_if(x, y = ""))),
+    # log-transform area variables
+    across(all_of(footage), function(x) log(x + 1), .names = "log_{.col}"), .keep = "unused"
+  ) %>% 
+    select(-all_of(remove))
+}
+d0 <- prepare_data(ames_train, to_factor = c("MS.SubClass", small_ordinals))
+```
+
+Right away, I choose to drop features, that either have highly imbalanced classes (for factors), or too few non-zero values (for integers) to be considered useful for prediction. This can be seen in the summary below. 
+```{r}
+imbalanced <- c("Utilities", "Street", "Pool.QC", "Heating", "Roof.Matl", "Misc.Feature", "Bsmt.Half.Bath",
+                "Misc.Val", "log_Pool.Area", "log_Low.Qual.Fin.SF", "log_X3Ssn.Porch")
+d <- select(d0, -all_of(imbalanced))
+# Display frequency counts
+d0 %>% select(all_of(imbalanced)) %>% 
+  mutate(across(where(is.numeric), function(x) as.factor(ifelse(x > 0, "> 0", "0")))) %>% summary()
+```
+\
+In addition to the above, one can perform the ANOVA F-test for dependence to detect any significant difference in average price between individual predictor levels of categorical variables. (The assumption of nearly normal distribution is satisfied by log-transformation of the price.) As the sample size increases, the ("unexplained") within-group variability about the means will diminish but the ("explained") variation between group means will not, resulting in a higher $F = \frac{\mathrm{explained\ variance}}{\mathrm{unexplained\ variance}}$ (small p-values) and the rejection of the null hypothesis $H_0$: "no difference". Hence, for our rather large sample (n = 1000), the following relatively high p-values are in agreement with the assumed independence, justifying our decision to discard those variables as not being reliable predictors of average price.
+
+```{r, class.source = "fold-hide"}
+d0 %>% summarize(
+  across(
+    c(all_of(imbalanced), -Utilities), function(x) {
+      model <- lm(log(price) ~ x, subset = if (is.numeric(x)) x > 0)  # null-values are different
+      p_value <- summary(aov(model))[[1]][["Pr(>F)"]][1]
+    }
+  )
+) %>% kable(digits = 3) %>% kable_styling("striped") %>% scroll_box(width = "100%")
+```
+\
+Lets now count the **missing values**:
+
+```{r}
+na_counts <- colSums(is.na(d))
+sort(na_counts[na_counts > 0], decreasing = TRUE)
+```
+\
+With only one observation without any information about basement, and one with unknown garage details, plus 2 entries with missing either `Bsmt.Exposure` or `Garage.Finish`, I choose to omit these 4 incomplete data entries from our rather large dataset. The following example of a pairwise scatterplots helps us to justify dropping the variables, containing many NA's, by revealing their redundancy due to high correlation among predictors. (This strategy can be applied more generally to other variables as well.).
+
+```{r, class.source = "fold-hide"}
+# Show redundancy of Garage.Yr.Blt and Lot.Frontage due to collinearity
+d_garage <- filter(ames_train, !is.na(Garage.Yr.Blt))
+garage_yr <- ggplot(d_garage, aes(y = Garage.Yr.Blt, x = Year.Built)) +
+  geom_point(shape = 16, size = 2, alpha = 0.5) + 
+  annotate(
+    "text", x = 1980, y = 1920, size = 5,
+    label = paste("Corr:", round(cor(d_garage$Garage.Yr.Blt, d_garage$Year.Built), digits = 3))
+  )
+d_lot <- filter(ames_train, !is.na(Lot.Frontage))
+lot_area <- ggplot(d_lot, aes(x = log(Lot.Area), y = log(Lot.Frontage))) +
+  geom_point(aes(shape = Lot.Shape, col = Lot.Shape), size = 2, alpha = 0.6) + 
+  geom_smooth(formula = y ~ x, method = "lm") + 
+  scale_color_brewer(palette = "Set2") +
+  scale_shape_manual(values = c(16, 17, 3, 15)) +
+  annotate(
+    "text", x = 11, y = 3.5, size = 5,
+    label = paste("Corr:", round(cor(log(d_lot$Lot.Area), log(d_lot$Lot.Frontage)), digits = 3))
+  )
+grid.arrange(
+  garage_yr, lot_area, ncol = 2,
+  top = grid::textGrob(
+    "Collinearity", gp = grid::gpar(fontsize = 14, fontface = "bold")
+  )
+)
+```
+
+- The `Garage.Yr.Blt` is missing for houses without the garage. Moreover, for majority of observations, the garage was built more or less simultaneously with the house itself, leading to a very high correlation coefficient ($R = 0.872$). Since it is implausible, that the `Garage.Yr.Blt` may contribute to price considerably (it is rather the garage area or its quality), and in order to avoid collinearity or redundancy of predictors, I choose to omit this variable altogether.
+
+- For the same reasons, I prefer to drop the `Lot.Frontage` with a lot of NA's from potential predictors of price, since after log-transformation it appears to be a linear function of the total `log(Lot.Area)` (with $R = 0.752$, which raises to $R = 0.883$ for the "Regular" `Lot.Shape`).
+
+- Lastly, I impute the 7 missing values of `Mas.Vnr.Area`, `Mas.Vnr.Type` to be 0 and "None", respectively, which are by far the most common observations in the sample. (Note that `sum(d$Mas.Vnr.Area > 0 & d$Mas.Vnr.Type == "None") = 2`)
+
+```{r}
+handle_na <- function(
+  data, filter_rows = c("Bsmt.Exposure", "Garage.Finish"), omit_cols = c("Garage.Yr.Blt", "log_Lot.Frontage")
+) {
+  transformed <- data %>% filter( ! if_any(all_of(filter_rows), is.na)) %>% 
+    select(-all_of(omit_cols)) %>% 
+    mutate(
+      log_Mas.Vnr.Area = replace_na(log_Mas.Vnr.Area, as.integer(0)),
+      Mas.Vnr.Type = replace_na(Mas.Vnr.Type, "None")
+    )
+}
+d <- handle_na(d)
+summary(select(d, log_Mas.Vnr.Area, Mas.Vnr.Type))
+```
+
+### Categorical Predictors
+
+A very useful way to visually inspect the possible dependence between our numeric response and discrete predictors is a side-by-side boxplots. In this way we can conveniently summarize and compare distributions of price for each level of every categorical variable.
+
+```{r categorical-predictors, class.source = "fold-hide", fig.asp = 1.5}
+d %>% select(where(is.factor), price) %>% 
+  pivot_longer(1:45, names_to = "predictor", values_to = "category") %>% 
+  ggplot(aes(x = log(price), y = category)) +
+  geom_boxplot() +
+  facet_wrap( ~ predictor, ncol = 5, scales = "free") +
+  labs(y = NULL, title = "Categorical Predictors for Price") +
+  theme(axis.text = element_text(size = 6))
+```
+
+- Some variables show visually less variation in price between classes, and so are first candidates for exclusion. 
+
+- Also, from the 2 versions of the same variable, I leave only the 1st one (with more pronounced variation).
+
+- When Quality (`.Qual`) and Condition (`.Cond`) variables are present, similar in nature, I usually prefer the first type over the second one (with more populated classes). 
+
+```{r}
+# Variation explained by each each factor (on average)
+adj.R2 <- sapply(
+  colnames(select_if(d, is.factor)),
+  function(x) summary(lm(formula(paste("log(price) ~", x)), data = d))$adj.r.squared
+)
+round(sort(adj.R2, decreasing = TRUE), 3)
+```
+\
+Additionally, we can take some hints about variable importance from the amount of variation in response, explained by each categorical predictor. Since some of the factors have multiple levels, one uses the adjusted $R^2$, which penalizes additional degrees of freedom.
+
+### Numerical Variables
+
+There are plenty of area variables (continuous) in the original dataset, that we can divide into respective groups (together with the associated discrete predictors).
+
+meaning  | qualitative                | footage
+:------- | :-------------             | :----------------
+Storeys  | `House.Style`              | `area` (Gr Liv Area) > 0
+|        | `MS.SubClass`              | `X1st.Flr.SF` > 0
+|        |                            | `X2nd.Flr.SF`
+|        |                            | `Low.Qual.Fin.SF` (removed)
+Lot      | `Lot.Shape`                | `Lot.Area` > 0
+|        | `Lot.Config`               | `Lot.Frontage` > 0 (removed)
+Basement | `Bsmt.Qual`                | `Total.Bsmt.SF`
+|        | `Bsmt.Cond`                | `Bsmt.Unf.SF`
+|        | `BsmtFin.Type.1`           | `BsmtFin.SF.1`
+|        | `BsmtFin.Type.2`           | `BsmtFin.SF.2`
+Garage   | `Garage.Type`, `Garage.Finish`, `Garage.Qual`, `Garage.Cond`  | `Garage.Area`
+Masonry  | `Mas.Vnr.Type`             | `Mas.Vnr.Area`
+Pool     | `Pool.QC` (removed)        | `Pool.Area` (removed)
+Porch    |                            | `Open.Porch.SF`
+|        |                            | `Enclosed.Porch`
+|        |                            | `X3Ssn.Porch` (removed)
+|        |                            | `Screen.Porch`
+Other    |                            | `Wood.Deck.SF`
+
+
+A lot of these variables have *structural* zeroes, that are constant (in contrast to 0, appearing due to sampling variability). They represent the absence of a given quantity and correspond to the "No" level of the respective qualitative features. Fitting the linear model to such predictor of mixed type (with the discrete mass concentrated at 0) will affect the slope parameter $\hat{\beta}$ for the continuous distribution, as the null values pull the line away from the main cloud of points. Therefore, when modelling, it is reasonable to disentangle the continuous and discrete parts, for instance, using an indicator variable to treat them separately. Some of the respective qualitative fatures effectively play this role, containing "No" category.
+
+(Note that splitting the values of independent variable $X$ generally reduces the overall variability within each of subsets, and is usually not recommended. However, it is justified in this case, as I argued above, since the values are generated in two different ways. Hence, we encounter a trade-off between the more accurate prediction and a lower precision of the estimates, according to the formula $\mathrm{SE}(\hat{\beta}) = \sigma^2/\mathrm{var}(X)$.) 
+
+The validity of a multiple regression method is based on the approximately **linear association** of each (continuous) predictor with response. This can be verified using the following scatterplots, where the discrete zero values are ignored and the provided correlation coefficient $R$ helps to assess the strength of association in each case. 
+
+```{r, class.source = "fold-hide", warning = FALSE}
+d %>% select_if(is.numeric) %>% 
+  relocate(price, .after = last_col()) %>% 
+  pivot_longer(cols = 1:21, names_to = "predictor", values_to = "predictor_value") %>% 
+  filter(predictor_value > 0) %>% 
+  # Compute correlation with response
+  group_by(predictor) %>% 
+  mutate(R = round(cor(predictor_value, log(price)), 2)) %>% 
+  # Draw scatterplots side-by-side
+  ggplot(aes(x = predictor_value, y = log(price))) +
+  geom_point(shape = 16, size = 1, alpha = 0.5) + 
+  geom_smooth(formula = y ~ x, method = "loess") +
+  coord_flip() + 
+  facet_wrap( ~ predictor, ncol = 7, scales = "free") + 
+  geom_text(mapping = aes(x = -Inf, y = -Inf, label = R), hjust   = -0.3, vjust   = -12) +
+  labs(x = NULL, title = "Logarithm of Price vs. Numerical Predictors") +
+  theme(axis.text = element_text(size = 6))
+```
+\
+Although in a multiple linear regression one is ultimately interested in *conditional* dependencies, the individual correlation coefficients can still give us some hint as to which predictors might be important:
+
+- The month and year the house was sold (`Mo.Sold`, `Yr.Sold`) are virtually irrelevant for the price.
+
+- The strongest relationship is with the `Overall.Qual`. The dependence on `Overall.Cond` demonstrates non-linear effects, to the extent that it flips the sign of $R$ (this measure of linear association, thus, is not applicable here). As will become clear later, this is due to the excess of *new* houses in the medium condition, driving the price up. Hence, the inclusion of the age of the house should help (and, possibly, an interaction term).
+
+- Although the dependence of price on `Year.Built` appears to be slightly less linear than that on `Year.Remod.Add`, this is largely due to the values of the latter being effectively truncated at 1950 for the vast majority of old houses, as can be checked on their respective scatterplot. For the most part, the remodel date is the "same as construction date if no remodeling or additions", so I consider its effect as a "minor correction".
+
+- Porch Area variables (`Open.Porch.SF`, `Enclosed.Porch`, `Screen.Porch`) show very weak association with price, considering the former is non-zero. (Remember that the latter condition should be stipulated for other area variables as well; see the above discussion.)
+
+- The `Total.Bsmt.SF` appears to be the single most reliable predictor among all Basement Area variables.
+
+- The situation with the above grade (ground) living area is a little bit trickier. First, the discrete ordinal `TotRms.AbvGrd` is linearly related with total `area` ($R = 0.811$). Among the two variables, I prefer the latter one (with the continuous range of values), since its correlation with price is higher.
+
+```{r}
+# Regression coefficients of Flr.SF on area (intercepts are close to 0)
+ames_train %>% mutate(second_floor = as.factor(ifelse(X2nd.Flr.SF > 0, "yes", "no"))) %>% 
+  group_by(second_floor) %>% 
+  summarize(across(c(X1st.Flr.SF, X2nd.Flr.SF), function(x) coef(lm(x ~ area))[2], .names = "{.col}_beta")) %>% 
+  kable(digits = 2) %>% kable_styling("striped")
+```
+
+- The total `area` is composed almost exclusively of square footage on one and/or two floors combined `I(X1st.Flr.SF + X2nd.Flr.SF)` (with correlation $R = 0.995$). The individual floor SF either both roughly equal the half of the total `area` (for a "2Story" building), or approximately `X1st.Flr.SF = area` (for a "1Story" building), as can be seen by regressing them on `area` within each building type. Therefore, knowing the exact values of each store SF is not beneficial, once we are given the total area and the number of floors (e.g., contained in the type of dwelling `MS.SubClass`, or `House.style`), as also verified by the very strong correlation coefficients.
+
+```{r, class.source = "fold-hide"}
+ames_train %>% group_by(House.Style) %>% summarize(
+  cor(log(X1st.Flr.SF), log(area)),
+  cor(log(X2nd.Flr.SF), log(area))
+) %>% kable(digits = 2) %>% kable_styling("striped")
+```
+\
+General Note: any feature that does not appear to be important on its own, can still bring in some predictive value if taken in combination with other variables (when all else is being held fixed). It is important then to ensure that one does not "fit the noise" in the data (that is, to minimize overfitting the training sample).
+
+* * *
+
+# Part 2 Development and assessment of an initial model, following a semi-guided process of analysis
+
+## Section 2.1 An Initial Model
+In building a model, it is often useful to start by creating a simple, intuitive initial model based on the results of the exploratory data analysis. (Note: The goal at this stage is **not** to identify the "best" possible model but rather to choose a reasonable and understandable starting point. Later you will expand and revise this model to create your final model.
+
+Based on your EDA, select *at most* 10 predictor variables from “ames_train” and create a linear model for `price` (or a transformed version of price) using those variables. Provide the *R code* and the *summary output table* for your model, a *brief justification* for the variables you have chosen, and a *brief discussion* of the model results in context (focused on the variables that appear to be important predictors and how they relate to sales price).
+
+* * *
+
+During the EDA, we have excluded the vast majority of numerical (mostly area) variables, as well as some highly imbalanced categorical predictors. For the initial model, lets choose about 5 numerical and 5 factor variables from those that appear to be most closely associated with response, such as area outside and inside the house (both above and below grade), as well as its age. The other important predictors are the qualty of the overall material and finish of the house, of the exterior and of the basement (despite the name `Bsmt.Qual` actually measures the height), as well as the overall condition of the house. Finally, number of fireplaces and garage size in car capacity seem to be good indicators of price. (Note the following linear dependencies that I found `Fireplaces ~ Fireplace.Qu`, `BsmtFin.Type.1 ~ Bsmt.Qual`, proportionality `Garage.Cars ~ Garage.Area`).
+
+From the preliminary analysis, I decide to only model housing prices under normal sale conditions, because houses with non-normal selling conditions exhibit atypical behavior and can disproportionately influence the model (as suggested in Capstone Quiz II). Since both `ames_test` and `ames_validation` data sets contain only "Normal" sales, there is a *sampling bias* (leading to test RMSE < train RMSE). There is no point in modelling the dependence on `Sale.Condition` (e.g., using interaction terms), since its accuracy for other types of sales cannot be independently verified.
+
+```{r fit_model}
+initial <- c("log_area", "log_Lot.Area", "log_Total.Bsmt.SF", "Year.Built",
+             "Overall.Cond", "Overall.Qual", "Exter.Qual", "Garage.Cars", "Fireplaces", "BsmtFin.Type.1")
+d_norm <- ames_train %>% prepare_data(
+  normal_sale = TRUE, to_factor = "MS.SubClass", remove = c("PID", imbalanced)
+) %>% handle_na()
+d_initial <- select(d_norm, c(price, all_of(initial)))
+initial.lm <- lm(log(price) ~ ., data = d_initial)
+summary(initial.lm)
+# Visually display coefficients with 95 CI, using dot-whiskers plot
+dwplot(initial.lm) + geom_vline(xintercept = 0, lty = 2)
+```
+\
+*Discussion*: All chosen variables appear to be important predictors, with significant coefficients (low p-values, for at least one level of categorical predictors). The numerical predictors are all positively related to price. For instance, for each additional point in `Overall.Qual`, one expects the price to be higher by $\exp(0.07) = 1.07$, that is to raise by about 7% on average, all else being equal. Similarly, for 10% increase in above grade living `area`, the predicted price is expected to raise by roughly $(1.1^{0.0372} - 1) * 100 = 3.6\%$. Analogously, the newer houses are more valuable, etc. 
+
+The coefficients for categorical predictors show the relative change in average `log(price)` with respect to reference level, all else being held fixed. Thus, any additional fireplace or car in the garage consecutively increases the average expected price by the respective amount. The model predicts lower price on average for any quality of the material on the exterior, below the "Excellent", and so on.
+
+```{r, echo = FALSE}
+psi.t <- function(u, df, deriv = 0) {
+  if (deriv == 0) return ( 1 / (u ^ 2 + df) ) 
+  else if (deriv == 1) return ( (df - u ^ 2) / (u ^ 2 + df) ^ 2 )
+}
+# initial.rlm <- rlm(log(price) ~ ., data = d_initial, psi = psi.t, df = 5)
+```
+
+* * *
+
+## Section 2.2 Model Selection
+
+Now either using `BAS` or another stepwise selection procedure choose the "best" model you can, using your initial model as your starting point. Try at least two different model selection methods and compare their results. Do they both arrive at the same model or do they disagree? What do you think this means?
+
+* * *
+
+Apart from the prior uncertainty, surrounding coefficients $\beta_j$ of each predictor, our uncertainty about model choice can be represented using probability distribution $p(M_k)$ over all possible models. The Bayesian Model Averaging (implemented in the `BAS` package) then allows to assess the full posterior uncertainty after seeing the data.
+
+```{r, class.source = "fold-hide"}
+# To help with the BAS plotting, if `force heredity = TRUE` is chosen
+# create named vector of subset indexes, skipping individual levels
+idx_per_lvl <- function(d, interactions = NULL, intercept = FALSE) {
+  if ( ! is.null(interactions) ) {
+    for (two_way in interactions) {
+      terms <- strsplit(two_way, ":")[[1]]
+      left <- terms[1]; right <- terms[2]
+      if ( is.numeric(d[[left]]) ) d[ , two_way] <- d[ , right] else d[ , two_way] <- d[ , left]
+    }
+  }
+  variables <- cumsum(
+    sapply(rename(d, Intercept = price), function(x) if (is.numeric(x)) 1 else length(levels(x)) - 1)
+  )
+  if ( ! intercept ) variables <- variables[-1]
+  return ( variables )
+}
+```
+
+```{r initial_model_select}
+initial.bas <- bas.lm(
+  formula = log(price) ~ ., data = d_initial,
+  # as n gets large, log-likelihood is approximated by BIC, for nearly flat reference prior on coef-s
+  prior = "BIC", 
+  # all models are equally likely
+  modelprior = uniform(), 
+  # force all levels of a factor to be included together
+  force.heredity = TRUE
+)
+# Display prior inclusion probabilities (PIP), without an intercept
+variables <- idx_per_lvl(d_initial)
+plot(initial.bas, which = 4, ask = FALSE, caption = "", sub.caption = "", 
+     col.in = "blue", col.ex = "darkgrey", lwd = 3, cex = 0.7,
+     main = "Importance of Coefficients Under BMA",
+     # show only one level of each factor (same PIP)
+     subset = variables, names = names(variables))
+```
+\
+I have chosen an uninformative flat reference prior on coefficients (calculated using `BIC` method), that results in fairly conservative estimates (in contrast to less restrictive approaches, such as `JZS` or `AIC` prior). All of the chosen predictors turn out to be important, with $p(\beta_j\neq 0) > 0.5$ nearly equal 1.
+
+One can compare relative plausibility of different models, using calculated `PostProbs` (their ratio then reduces to Bayes factors for our uniform prior distribution). The resulting model space and content is visualized graphically, where each color corresponds to the log posterior odds (over the null model):
+
+```{r}
+# I have silently modified plot.bas() and image.bas() to customize variable names
+image(initial.bas, cex.axis = 1, rotate = FALSE, subset = variables, names = names(variables))
+```
+\
+Given our choice of priors, the single best model is the full initial model, including all 10 variables, according to either Highest Probability Model (optimal w.r.t. 0-1 loss), Median Probability Model (pips > 0.5), or the Best Predictive Model (whose predictions are closest to that of BMA). We can compare the `BAS` results with the stepwise model selection, using "information criteria".
+
+```{r}
+n <- nrow(d_initial)
+# Backward elimination using BIC, rather than AIC, penalized -2*log(average likelihood) + k
+step_initial.lm <- step(initial.lm, k = log(n), trace = TRUE)
+```
+\
+In contrast to BMA, the backward elimination strategy does not scan through all possible combinations of predictors and, hence, it can miss the model with the better score. Here, elimination of any variable leads to higher ("worse") BIC value, so one arrives at the same model as `BAS` results. (As an alternative, the hybrid selection method alternates between elimination and inclusion of variables.)
+
+* * *
+
+## Section 2.3 Initial Model Residuals
+
+One way to assess the performance of a model is to examine the model's residuals. In the space below, create a residual plot for your preferred model from above and use it to assess whether your model appears to fit the data well. Comment on any interesting structure in the residual plot (trend, outliers, etc.) and briefly discuss potential implications it may have for your model and inference / prediction you might produce.
+
+* * *
+
+```{r initial_model_resid}
+pred.HPM <- predict(initial.bas, estimator = "HPM")
+d_norm.aug <- d_norm %>% mutate(
+  initial.fit = pred.HPM$fit, initial.resid = log(price) - initial.fit, initial.pred = exp(initial.fit)
+)
+```
+
+```{r, fig.asp = 1, class.source = "fold-hide"}
+d_resid <- mutate(d_norm.aug, fit = initial.fit, resid = initial.resid, .keep = "unused")
+# Fit distribution(s)
+r <- d_resid$resid
+normal.fit <- MASS::fitdistr(r, "normal")$estimate
+t.fit <- MASS::fitdistr(
+  r, "t", start = list(m = mean(r), s = sd(r), df = 3), lower = c(-1, 0.001, 1)
+)$estimate
+names(t.fit) <- c("mu", "sigma", "df")
+resid_hist <- ggplot(d_resid, aes(x = resid)) +
+  geom_histogram(aes(y = ..density..), binwidth = 0.05, col = "white", alpha = 0.3) +
+  geom_density(aes(col = "Data"), size = 1, fill = "mediumseagreen", alpha = 0.15) + 
+  stat_function(aes(col = "t"), size = 1, alpha = 0.6, fun = ggdist::dstudent_t, args = t.fit) +
+  stat_function(aes(col = "Normal"), size = 1, alpha = 0.6, fun = dnorm, args = normal.fit) + 
+  scale_color_manual(NULL, values = c("seagreen", "red", "dodgerblue")) + 
+  annotate("text", x = mean(r), y = 0.001, label = paste("Kurtosis:", round(e1071::kurtosis(r), 3))) +
+  theme(legend.position = c(0.15, 0.9)) +
+  labs(title = "Histogram", x = "Residuals", y = "Probability Density")
+resid_qqnorm <- ggplot(d_resid, aes(sample = resid)) + 
+  stat_qq_line(aes(col = "t"), distribution = qt, dparams = t.fit["df"], alpha = 0.5, size = 1) +
+  stat_qq(aes(col = "t"), distribution = qt, dparams = t.fit["df"], size = 2, shape = 21, alpha = 1) +
+  stat_qq_line(aes(col = "Normal"), alpha = 0.5, size = 1) +
+  stat_qq(aes(col = "Normal"), size = 2, shape = 21, alpha = 1) + 
+  scale_color_manual(NULL, values = c("#F8766D", "#00BFC4")) + 
+  theme(legend.position = c(0.15, 0.9)) +
+  labs(title = "Q-Q Plot for Residuals", x = "Theoretical Quantiles", y = "Sample Quantiles")
+resid_fitted <- ggplot(d_resid, aes(x = fit, y = abs(resid))) +
+  geom_point(shape = 16, size = 2, alpha = 0.5) +
+  geom_smooth(formula = y ~ x, method = "loess") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(title = "Residuals vs. Fitted", x = "Fitted Values", y = "Absolute Values of Residuals")
+resid_order <- ggplot(d_resid, aes(x = 1:length(resid), y = resid)) +
+  geom_point(shape = 21, size = 2) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(title = "Residual Independence", x = "Order of Collection", y = "Residuals")
+grid.arrange(resid_hist, resid_qqnorm, resid_fitted, resid_order, ncol = 2, nrow = 2)
+```
+
+1. *The residuals are nearly normal* around 0. They are somewhat over-dispersed with heavy tails (corresponding to flipped S-shape on the QQ-plot and positive excess kurtosis), but deviations from normality are rather small (especially for large data sets like ours, n = 832). 
+2. *The variability of the residuals is approximately constant* (homoscedasticity), without obvious trend, as can be seen from the absolute values of residuals, plotted against fitted values of `log(price)`. One can identify several observations that look like outliers in our model. I will return to this issue shortly.  
+3. The apparent randomness of residuals w.r.t. order of collection implies that they are *independent*, coming from a random sample.  
+4. Each variable should be *linearly related* to the outcome, as we already discussed in the EDA section on the variable transformation. We can additionally check linearity assumption, by plotting model residuals against each numeric predictor. There may be a slight underestimate of price by our model for very large area values.
+
+```{r, class.source = "fold-hide"}
+draw_scatter <- function(data, response = "resid", predictors, ...) {
+  n <- length(predictors)
+  plots <- vector(mode = "list", length = n)
+  for (i in 1:n) {
+    plots[[i]] <- ggplot(data, aes_string(x = predictors[i], y = response)) + 
+      geom_point(shape = 16, size = 2, alpha = 0.5) + 
+      geom_smooth(formula = y ~ x, method = "loess", span = 0.9) +
+      labs(y = NULL)
+  }
+  args <- list(...)
+  do.call(grid.arrange, c(plots, args))
+}
+draw_scatter(
+  d_resid, predictors = c(
+    "log_area", "log_Lot.Area", "log_Total.Bsmt.SF", "Overall.Qual", "Overall.Cond", "Year.Built"
+  ), ncol = 3, top = grid::textGrob(
+    "Linearity Assumption: Residuals vs. Predictors", gp = grid::gpar(fontsize = 14, fontface = "bold")
+  )
+) 
+```
+\
+Notice that an observation can only be unexpected or influential in light of a particular model. Assuming the residuals come from a Gaussian distribution, identify up to 4 potential outliers in a dataset:
+
+```{r}
+EnvStats::rosnerTest( d_norm.aug$initial.resid, k = 4 )$all.stats 
+```
+\
+We can inspect these observations, having the highest squared residuals, to find anything unusual about them. For instance, the most extreme outlier is seriously overpriced for its area and lot size. It can partially be explained by its location in `Neighborhood = "IDOTRR"` (i.e.,	"Iowa DOT and Rail Road"), but even more illuminating, it may actually be a "barn" building with `Roof.Style == "Gambrel"` (cf. the [codebook](http://jse.amstat.org/v19n3/decock/DataDocumentation.txt)).
+
+```{r, class.source = "fold-hide"}
+out_idx <- sort.int( d_norm.aug$initial.resid ^ 2, decreasing = TRUE, index.return = TRUE)$ix[1:3]
+d_norm.aug %>% tibble::rownames_to_column(var = "idx") %>% slice(out_idx) %>% 
+  kable() %>% kable_styling("striped") %>% scroll_box(width = "100%")
+```
+\
+Are these points *influential and / or have high leverage?* From the following plot one can see that outliers are well within the main cloud of points (low leverage) and have low influence on predictions. Cook’s distance measures the effect of deleting a point on the combined parameter vector.
+
+```{r}
+plot(initial.lm, which = 5, id.n = 2)
+```
+\
+**Bonus discussion**: The assumption of the normal distribution of errors makes the model more easily surprised by rare observations. Were the data contaminated by *highly influential* outliers, one could employ some kind of "robust regression" instead (e.g., replacing the Gaussian error with Student's t-distribution with thicker tails). I have tried this approach using `MASS::rlm()` (with either default method, or custom [psi.t](https://stats.stackexchange.com/questions/117980/regression-with-t-distributed-errors-and-massrlm) settings). Although the residuals now are distributed in accord with the new assumption, the performance of the model is worse on both training and test datasets. 
+
+There is a theoretical reason for this effectiveness of ordinary least squares. According to [the Gauss-Markov theorem](https://en.wikipedia.org/wiki/Gauss%E2%80%93Markov_theorem), one "cannot do better than OLS" within the class of linear unbiased estimators, assuming the errors are uncorrelated, have equal variances and expectation value of zero. Notice that these conditions do not imply normality. Therefore, since outliers do not present the problem in our case, I will stick with the ordinary linear regression, that gives better results.
+
+
+* * *
+
+## Section 2.4 Initial Model RMSE
+
+You can calculate it directly based on the model output. Be specific about the units of your RMSE (depending on whether you transformed your response variable). The value you report will be more meaningful if it is in the original units (dollars).
+
+* * *
+
+Lets calculate both RMSE and R-squared, but first, convert predicted `log(price)` into price in dollars \$.
+
+```{r initial_model_rmse, class.source = "fold-hide"}
+d_norm.aug %>% mutate(y_bar = mean(price)) %>% 
+  summarize(
+    RMSE = sqrt( mean( (price - initial.pred) ^ 2 ) ), 
+    Rsq = 1 - RMSE ^ 2 / mean( (price - y_bar) ^ 2 )
+  ) %>% kable(digits = 4) %>% kable_styling("striped")
+```
+\
+The initial model has root mean squared error of about 20,473\$, while the variance explained according to R-squared is 92\%.
+
+* * *
+
+## Section 2.5 Overfitting 
+
+The process of building a model generally involves starting with an initial model (as you have done above), identifying its shortcomings, and adapting the model accordingly. This process may be repeated several times until the model fits the data reasonably well. However, the model may do well on training data but perform poorly out-of-sample (meaning, on a dataset other than the original training data) because the model is overly-tuned to specifically fit the training data. This is called “overfitting.” To determine whether overfitting is occurring on a model, compare the performance of a model on both in-sample and out-of-sample data sets. To look at performance of your initial model on out-of-sample data, you will use the data set `ames_test`.
+
+```{r loadtest, message = FALSE}
+load("data/ames_test.Rdata")
+```
+
+Use your model from above to generate predictions for the housing prices in the test data set. Are the predictions significantly more accurate (compared to the actual sales prices) for the training data than the test data? Why or why not? Briefly explain how you determined that (what steps or processes did you use)?
+
+* * *
+
+Since we pre-processed the `ames_train` data set for modelling purposes, we should do the same with the test data frame. It turns out, if the model includes factor variables, whose levels are missing from the training subset, one may eventually encounter "factor has new levels" issue, when making predictions on previously unseen data. If only a few such observations, I then choose to simply omit these data points, since the model cannot be used for prediction in this case. (Alternatively, the problem could be avoided with more careful train/test split, e.g., using some advanced sampling techniques.) 
+
+```{r}
+# Create reusable helper function to omit unused levels, for future references
+omit_unused <- function(data, lm, levels = NULL) {
+  if ( is.null(levels) ) levels <- lm$xlevels  # as named list
+  return( data %>% filter( if_all( all_of(names(levels)), ~ .x %in% levels[[substitute(.x)]] ) ) )
+}
+d_test <- ames_test %>% prepare_data(
+  normal_sale = TRUE, to_factor = "MS.SubClass", remove = c("PID", imbalanced)
+) %>% handle_na()  # 1 NA removed
+cat("Number of observations:", nrow(ames_test), 
+    "\nHow many left:", nrow(d_test), "\nAll NA removed:", ! any(is.na(d_test)))
+```
+\
+Lets test our model on previously unseen data. One way to assess how well a model reflects uncertainty is through *coverage probability*. For example, if assumptions are met, a 95% prediction interval for `log(price)` (colored in grey on the plot) should include the true value roughly 95% of the time.
+
+```{r initmodel_test, class.source = "fold-hide"}
+pred.HPM <- predict(initial.bas, newdata = d_test, estimator = "HPM", se.fit = TRUE, nsim = 10 ^ 6)
+d_test.aug <- cbind(d_test, cbind(exp(confint(pred.HPM, parm = "pred")))) %>% 
+  mutate(initial.pred = pred, initial.lwr = `2.5%`, initial.upr = `97.5%`, .keep = "unused")
+cover_prob <- summarize(d_test.aug, mean(price > initial.lwr & price < initial.upr))[1,1]
+ggplot(d_test.aug, aes(x = log(price), y = log(initial.pred))) + 
+  geom_ribbon(aes(ymin = log(initial.lwr), ymax = log(initial.upr)), fill = "grey70", alpha = 0.7) + 
+  geom_abline(slope = 1, intercept = 0, size = 1, linetype = "dashed", color = "blue") +
+  geom_point(shape = 16, size = 2, alpha = 0.7) +
+  annotate("text", x = 12, y = 13, size = 5, label = paste("Coverage Probability:", round(cover_prob, 3))) +
+  labs(y = "Prediction", title = "Initial Model Performance on the Test Data")
+```
+\
+It looks like the model generalizes reasonably well. To check for overfitting, one could compare RMSE or $R^2$ for training and test datasets.
+```{r, class.source = "fold-hide"}
+d_test.aug %>% summarize(
+  RMSE = sqrt( mean( (price - initial.pred) ^ 2 ) ), 
+  Rsq = 1 - RMSE ^ 2 / mean( (price - mean(price)) ^ 2 )
+) %>% kable(digits = 3) %>% kable_styling("striped")
+```
+\
+The obtained values appear to be close to in-sample results. *Are these differences big or small*, in other words, does the model performance differ significantly between train and test subsets? As with any such claim in statistics, it is not very meaningful to compare two point estimates without providing the accompanying uncertainty. Since the standard error reduces as the sample size grows, for such large data sets as ours, we almost surely will detect the difference, e.g., via usual null-hypothesis significance test (NHST). However, one can test not only to reject the strict zero, but *any* effect size, as well as the finite *range* of values.
+
+**Bonus discussion**: The opposite of NHST is the so called [equivalence testing](https://journals.sagepub.com/eprint/IW7EgmfBewJdICjP9YYX/full) (cf. also [Improving your statistical inferences](https://www.coursera.org/learn/statistical-inferences) on Coursera), where one assumes now that there is an effect (the new null-hypothesis $H_0: |\text{effect}\ d| > \Delta$) and tries to reject it (with a p < 0.05), using two one-sided tests $t=\frac{\mu_1 - \mu_2 - \Delta}{SD_{\text{pooled}}\sqrt{\frac{1}{n_1} + \frac{1}{n_1}}}$ (TOST). The alternative hypothesis is that the effect is anywhere in the equivalence range $H_A:|d|<\Delta$ (meaning that the effect, which is too small to worth attention, is deemed "equivalent to the absence of an effect"). This procedure has certain advantages over the standard NHST:
+
+1. Since the null-hypothesis can only be rejected, but is never accepted, one usually has either a very weak claim $d\neq0$ (some effect exists, however small), or it is not possible to meaningfully conclude that there is no effect (strong assumption $d=0$). When the situation is reversed as above, the rejection of "large effect" assumption, leads to the acceptance of the "weak effect" alternative (the difference is too small for all practical matters).
+
+2. The presence of a threshold $\Delta$ on the effect size (no more arbitrary than the common significance level $\alpha = 0.05$) forces us to think about cost and benefit of further investigation, power considerations, that is, practical, rather than statistical "significance".
+
+In principle, the previous research can help to elicit the reasonable equivalence bound $\Delta$. For instance, had our model selection discarded the better fit to the sample in favor of the less accurate one, based on higher posterior probability $p(M_k|\text{data})$ or BIC score (designed to penalize for overfitting), we could have used this difference as a reference guide. Otherwise, the change is not relevant if it is within the natural spread of the statistic of interest. Lets say, we can tolerate the raw difference in $R^2$ no larger than 2\% (knowing the market, one could have used the absolute RMSE in \$). A quick way to estimate the sampling variability of a given statistic is by using the *bootstrap* method, i.e., the repeated sampling with replacement.
+
+```{r}
+# Provide a function that computes the statistic of interest for the bootstrap sample (index subset)
+RMSE <- function(d, i) sqrt( mean( (d$price[i] - d$pred[i]) ^ 2 ) )
+Rsq <- function(d, i) 1 - mean( (d$price[i] - d$pred[i]) ^ 2 ) / mean( (d$price[i] - mean(d$price[i])) ^ 2 )
+# Calculate the summary statistics using bootstrap
+boot.stats <- function(sample1, sample2, statistic, R = 10 ^ 5) {
+  boot1 <- boot(sample1, statistic, R)
+  boot2 <- boot(sample2, statistic, R)
+  n1 <- nrow(sample1); n2 <- nrow(sample2)
+  m1 <- mean(boot1$t); m2 <- mean(boot2$t)
+  sd1 <- sd(boot1$t); sd2 <- sd(boot2$t)
+  var_p <- ( (n1 - 1) * sd1 ^ 2 +  (n2 - 1) * sd2 ^ 2 ) / ( n1 + n2 - 2 ) 
+  return( list( stat = as.character(substitute(statistic)), 
+                n1 = n1, n2 = n2, m1 = m1, m2 = m2, dm = m1 - m2, d = (m1 - m2) / sqrt( var_p ), 
+                sd1 = sd1, sd2 = sd2, bias1 = m1 - boot1$t0, bias2 = m2 - boot2$t0 ) )
+}
+# Choose the equivalence bound (either raw dm or Cohen's d)
+set.seed(6)
+sample_train <- d_norm.aug %>% mutate(pred = initial.pred)
+sample_test <- d_test.aug %>% mutate(pred = initial.pred)
+RMSE.boot <- boot.stats(sample_test, sample_train, RMSE)
+Rsq.boot <- boot.stats(sample_test, sample_train, Rsq)
+as.data.frame(mapply(c, RMSE.boot, Rsq.boot, SIMPLIFY = FALSE)) %>% 
+  kable(digits = 4) %>% kable_styling("striped") 
+```
+\
+Notice that the raw mean difference `dm` is well within the `2 * sd2` of the sampling distribution for the training set. The standardized measure of effect size is the Cohen's $d = \frac{\mu_1 - \mu_2}{SD_{\text{pooled}}}$, and the obtained values are typically considered very large in experimental design (cf. the [interpretation](https://rpsychologist.com/cohend/)). Since we want to exclude particularly big drops in model performance, not surprisingly, it is rather easy to fit the equivalence bounds.
+```{r}
+set.seed(6)
+TOSTtwo.raw(
+  n1 = Rsq.boot$n1, m1 = Rsq.boot$m1, sd1 = Rsq.boot$sd1, low_eqbound = -0.02, 
+  n2 = Rsq.boot$n2, m2 = Rsq.boot$m2, sd2 = Rsq.boot$sd2, high_eqbound = 0.02,
+  verbose = FALSE, plot = TRUE
+)
+```
+\
+*Interpretation*: Provided we consider differences in $R^2$ less than 0.02 as negligible, the performance of our model is equivalent on the training and test data samples ("no overfitting"), although we can still detect statistically significant non-zero effect. (Similar considerations are valid for RMSE statistic with the mean difference about 1485\$ and the bound as low as 1600\$, say.)
+
+* * *
+
+**Note to the learner:** If in real-life practice this out-of-sample analysis shows evidence that the training data fits your model a lot better than the test data, it is probably a good idea to go back and revise the model (usually by simplifying the model) to reduce this overfitting. For simplicity, we do not ask you to do this on the assignment, however.
+
+# Part 3 Development of a Final Model
+
+Now that you have developed an initial model to use as a baseline, create a final model with *at most* 20 variables to predict housing prices in Ames, IA, selecting from the full array of variables in the dataset and using any of the tools that we introduced in this specialization.  
+
+Carefully document the process that you used to come up with your final model, so that you can answer the questions below.
+
+## Section 3.1 Final Model
+
+Provide the summary table for your model.
+
+* * *
+
+The question does not specify whether interaction terms should be counted as additional variables or not, so I assume the answer is "yes". The summary of my final linear model is as follows:
+
+```{r model_playground}
+final <- c("log_area", "log_Lot.Area", "log_Total.Bsmt.SF", "Year.Built", "Overall.Cond", 
+           "Overall.Qual", "Exter.Qual", "Garage.Cars", "Fireplaces", "BsmtFin.Type.1", "MS.Zoning",
+           "Bsmt.Full.Bath", "Central.Air", "Bedroom.AbvGr", "Year.Remod.Add", 
+           "log_area:Overall.Qual", "Year.Built:Overall.Cond", "log_Total.Bsmt.SF:Bsmt.Full.Bath",
+           "Bsmt.Full.Bath:Bedroom.AbvGr", "Central.Air:Year.Remod.Add")
+final_rhs <- paste(final, collapse = " + ")
+final.lm <- lm(formula = paste("log(price) ~", final_rhs), data = d_norm)
+summary(final.lm)
+```
+\
+It contains all of the variables of the initial model, plus 10 additional ones, 5 of each are interaction terms. Some of the predictors may have low significance in the presence of interactions, but it is important to include these "main effects" as well (the `BAS` option `force.heredity = TRUE` ensures such hierarchy rules).
+
+* * *
+
+## Section 3.2 Transformation
+
+Did you decide to transform any variables?  Why or why not? Explain in a few sentences.
+
+* * *
+
+Due to strong right-skewness, I have applied log-transformation to the response variable `price`, as well as to all predictor variables with the meaning of "area" (as described in EDA). The latter are first shifted by insignificant bias of 1 SF, so that the zero area is also zero on the log-scale (instead of $-\infty$). The distance from null is stretched on the new scale, but the non-zero values turn out to be more linearly related to `log(price)`, as result.
+
+I did not center or scale variables, since most of them have natural boundaries, and I would like to maintain interpretability. Since both test and validation data sets contain only `Sale.Condition == "Normal"` entries, I have fitted the model to only this type of sales, instead of including the corresponding variable and its associated interactions.
+
+
+* * *
+
+## Section 3.3 Variable Interaction
+
+Did you decide to include any variable interactions? Why or why not? Explain in a few sentences.
+
+* * *
+
+I have included 5 interactions in total: `log_area * Overall.Qual`, `Year.Built * Overall.Cond`, `log_Total.Bsmt.SF * Bsmt.Full.Bath`, `Bsmt.Full.Bath * Bedroom.AbvGr`, `Central.Air * Year.Remod.Add`. Their effect can be seen on the following plots:
+
+
+```{r model_inter, fig.asp = 1.2, class.source = "fold-hide"}
+area_qual <- ggplot(d, aes(y = log(price), x = log_area, col = as.factor(Overall.Qual))) +
+  geom_point(size = 1, alpha = 0.5) + 
+  labs(col = "Overall.Qual", x = "log(area)") +
+  theme(legend.position = "top") + guides(col = guide_legend(byrow = TRUE))
+year_cond <- ggplot(d, aes(y = log(price), x = Year.Built, col = as.factor(Overall.Cond))) +
+  geom_point(size = 1, alpha = 0.6) + 
+  viridis::scale_color_viridis(discrete = TRUE, option = "D") + 
+  labs(col = "Overall.Cond") +
+  theme(legend.position = "top") + guides(col = guide_legend(byrow = TRUE))
+cond_year <- ggplot(d, aes(y = log(price), x = Overall.Cond, col = Year.Built)) +
+  geom_point(size = 1, alpha = 0.6) + 
+  viridis::scale_color_viridis(option = "D") + 
+  theme(legend.position = "top") + guides(col = guide_legend(nrow = 1))
+bsmtSF_fullbath <- ggplot(d, aes(y = log(price), x = log_Total.Bsmt.SF, col = Bsmt.Full.Bath)) +
+  geom_point(size = 1, alpha = 0.6) + 
+  labs(x = "log(Total.Bsmt.SF)") +
+  theme(legend.position = "top") + guides(col = guide_legend(nrow = 1)) 
+fullbath_bed <- ggplot(d, aes(x = Bedroom.AbvGr, y = Bsmt.Full.Bath)) +
+  geom_tile(aes(fill = log(price))) + viridis::scale_fill_viridis() +
+  theme(legend.position = "top") + guides(col = guide_legend(nrow = 1))
+remod_air <- ggplot(d, aes(y = log(price), x = Year.Remod.Add, col = Central.Air)) +
+  geom_point(size = 1, alpha = 0.6) +
+  theme(legend.position = "top") + guides(col = guide_legend(nrow = 1))
+grid.arrange(
+  area_qual, year_cond, bsmtSF_fullbath, cond_year, remod_air, fullbath_bed, ncol = 2,
+  top = grid::textGrob(
+    "Interactions", gp = grid::gpar(fontsize = 14, fontface = "bold")
+  )
+)
+```
+\
+Note that the peak in price for medium condition houses is explained by the large number of more expensive recently built "average" houses. The accompanying plot against `Year.Built` illuminates how old houses split in price, according to `Overall.Cond`, that can compensate for the age of the house.
+
+
+* * *
+
+## Section 3.4 Variable Selection
+
+What method did you use to select the variables you included? Why did you select the method you used? Explain in a few sentences.
+
+* * *
+
+Starting with the full model, containing *all* available predictors, one cannot guarantee that the found best one will have *at most 20* of them. On the other hand, the stepwise approach can help us select the set of most promising predictors (and even rank them by the impact on BIC scores). Since the initial model is already quite accurate, I take it as a starting point and consecutively add or remove variables, using `direction = "both"` method. I have also included all 2-way interactions in the scope of the search. One arrives at the following model:
+
+```{r model_select, class.source = "fold-hide"}
+n <- nrow(d_norm)
+rhs_initial <- paste(initial, collapse = " + ")
+rhs_all <- paste(colnames(d_norm[ , -1]), collapse = " + ")
+step_final.lm <- step(
+  lm(formula = paste("log(price) ~", rhs_initial), data = d_norm), 
+  scope = paste("log(price) ~ (", rhs_all, ") ^ 2"), 
+  direction = "both", k = log(n), trace = FALSE
+)
+step_final.lm
+```
+\
+None of the initial model variables has been removed. To get the final model of at most 20 variables, including interactions, I have eliminated 4 terms without substantial impact on performance (3 interactions and 1 predictor `log_BsmtFin.SF.1`, that seems to me redundant with respect to `log_Total.Bsmt.SF`). At last, confirm that the selected model is indeed the best one according to BMA (HPM = MPM = BPM).
+
+```{r, class.source = "fold-hide"}
+set.seed(200)
+# Get the variables as strings from the step output
+call_rows <- trimws(deparse(summary(step_final.lm)$call))
+call_rhs <- strsplit(paste(call_rows, collapse = " "), split = "~ |, ")[[1]][2]
+vars <- strsplit(call_rhs, split = " + ", fixed = TRUE)[[1]]
+# Omit the least relevant terms
+rhs_final <- paste(vars[c(1:15, 17:19, 21:22)], collapse = " + ")
+final.bas <- bas.lm(
+  formula = paste("log(price) ~", rhs_final), data = d_norm,
+  prior = "BIC", modelprior = uniform(), force.heredity = TRUE
+)
+# Display PIP's
+variables <- idx_per_lvl( d_norm[ , c("price", vars[c(1:15)])], interactions = vars[c(17:19, 21:22)] )
+plot(final.bas, which = 4, ask = FALSE, caption = "", sub.caption = "", 
+     col.in = "blue", col.ex = "darkgrey", lwd = 3, cex = 0.4,
+     main = "Importance of Coefficients Under BMA",
+     subset = variables, names = names(variables))
+```
+
+```{r, class.source = "fold-hide"}
+image(final.bas, cex.axis = 0.5, rotate = FALSE, subset = variables, names = names(variables))
+```
+
+* * *
+
+## Section 3.5 Model Testing
+
+How did testing the model on out-of-sample data affect whether or how you changed your model? Explain in a few sentences.
+
+* * *
+
+24 variables in total were selected by the stepwise approach, using BIC criterion. I used the results on the test subset in order to eliminate 4 of them, without noticeable drop in model performance, as estimated by the test RMSE or $R^2$ metric. In fact, while removing `log_Total.Bsmt.SF:Overall.Qual` reduced $R^2$ by only 0.003, it actually increased the coverage probability by about 0.01, which is a better reflection of uncertainty by our model. 
+
+```{r final_model_testing, class.source = "fold-hide"}
+pred.HPM <- predict(final.bas, newdata = d_test, estimator = "HPM", se.fit = TRUE, nsim = 10 ^ 6)
+d_test.aug <- cbind(d_test.aug, cbind(exp(confint(pred.HPM, parm = "pred")))) %>% 
+  mutate(final.pred = pred, final.lwr = `2.5%`, final.upr = `97.5%`, .keep = "unused") 
+cover_prob <- summarize(d_test.aug, mean(price > final.lwr & price < final.upr))[1,1]
+ggplot(d_test.aug, aes(x = log(price), y = log(final.pred))) + 
+  geom_ribbon(aes(ymin = log(final.lwr), ymax = log(final.upr)), fill = "grey70", alpha = 0.7) + 
+  geom_abline(slope = 1, intercept = 0, size = 1, linetype = "dashed", color = "blue") +
+  geom_point(shape = 16, size = 2, alpha = 0.7) +
+  annotate("text", x = 12, y = 13, size = 5, label = paste("Coverage Probability:", round(cover_prob, 3))) +
+  labs(y = "Prediction", title = "Final Model Performance on the Test Data")
+```
+\
+The final model performance on the test set is as follows:
+```{r, class.source = "fold-hide"}
+d_test.aug %>% summarize(
+  RMSE = sqrt( mean( (price - final.pred) ^ 2 ) ), 
+  Rsq = 1 - RMSE ^ 2 / mean( (price - mean(price)) ^ 2 )
+) %>% kable(digits = 4) %>% kable_styling("striped")
+```
+\
+Another way how the test data can help in bias-variance tradeoff is through drawing the *learning curves*, that is the error on both the training and test subsets, plotted against the sample size, used for model fitting.
+
+```{r, class.source = "fold-hide"}
+set.seed(33)
+steps <- seq(from = 32, to = 832, by = 10)
+n_steps <- length(steps)
+learn <- data.frame(s = steps, train.RMSE = integer(n_steps), test.RMSE = integer(n_steps))
+d_train <- d_norm[sample(832), ]
+for (s in steps) {
+  d_s <- d_train[1:s, ]
+  fit.lm <- lm(paste("log(price) ~", rhs_final), data = d_s)
+  learn$train.RMSE[which(steps == s)] <- RMSE(
+    cbind(d_s, pred = exp(predict(fit.lm))), i = 1:s
+  )
+  d_test_s <- d_test %>% omit_unused(fit.lm)
+  learn$test.RMSE[which(steps == s)] <- RMSE(
+    cbind(d_test_s, pred = exp(predict(fit.lm, newdata = d_test_s))), i = 1:nrow(d_test_s)
+  )
+}
+learn_longer <- learn %>% rename(batch = s, train = train.RMSE, test = test.RMSE) %>% 
+  pivot_longer(cols = 2:3, names_to = "sample", values_to = "RMSE")
+ggplot(learn_longer, aes(x = batch, y = RMSE, col = sample)) + geom_line(size = 1.2)
+```
+\
+As the model learns from data, the two errors converge and more-or-less level-off after 400 sample points, with the gap being around 1000\$ ("low variance"). This means, adding more data is unlikely to improve the fit. (In fact, the training error might even decrease a bit, as the model learns more from the sample.) In order to further reduce the error one should use more complex models (higher variance), that in turn may result in poorer generalizability (higher train-test gap).
+
+* * *
+
+# Part 4 Final Model Assessment
+
+## Section 4.1 Final Model Residual
+
+For your final model, create and briefly interpret an informative plot of the residuals.
+
+* * *
+
+All that we said about initial model residuals is also valid for the final one: 1) close to normality, but slightly over-dispersed, 2) constant variability, with few notable outliers, etc.
+
+```{r final_model_resid}
+pred.HPM <- predict(final.bas, estimator = "HPM")
+d_norm.aug <- d_norm.aug %>% mutate(
+  final.fit = pred.HPM$fit, final.resid = log(price) - final.fit, final.pred = exp(final.fit)
+)
+```
+
+```{r, fig.asp = 0.4, class.source = "fold-hide"}
+d_resid <- mutate(d_norm.aug, resid = final.resid, fit = final.fit, .keep = "unused")
+r <- d_resid$resid
+normal.fit <- MASS::fitdistr(r, "normal")$estimate
+resid_hist <- ggplot(d_resid, aes(x = resid)) +
+  geom_histogram(aes(y = ..density..), binwidth = 0.05, col = "white", alpha = 0.3) +
+  geom_density(aes(col = "Data"), size = 1, fill = "mediumseagreen", alpha = 0.15) + 
+  stat_function(aes(col = "Normal"), size = 1, fun = dnorm, args = normal.fit) +
+  scale_color_manual(NULL, values = c("seagreen", "red")) + 
+  annotate("text", x = mean(r), y = 0.001, label = paste("Kurtosis:", round(e1071::kurtosis(r), 3))) +
+  theme(legend.position = c(0.15, 0.9)) +
+  labs(title = "Histogram", x = "Residuals", y = "Probability Density")
+resid_qqnorm <- ggplot(d_resid, aes(sample = resid)) + 
+  stat_qq(size = 2, shape = 21) + stat_qq_line() +
+  labs(title = "Normal Q-Q Plot for Residuals", x = "Theoretical Quantiles", y = "Sample Quantiles")
+resid_fitted <- ggplot(d_resid, aes(x = fit, y = resid)) +
+  geom_point(shape = 16, size = 2, alpha = 0.5) +
+  geom_smooth(formula = y ~ x, method = "loess") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(title = "Residuals vs. Fitted", x = "Fitted Values", y = "Absolute Values of Residuals")
+grid.arrange(resid_hist, resid_qqnorm, resid_fitted, ncol = 3)
+```
+\
+Although the outliers are not as extreme as in the initial model, one can see from the next plot, that the point 610 has higher leverage and is more influential now. This is probably due to inclusion of `MS.Zoning`, where only 5 observations are also classified as "Commercial".
+
+```{r, class.source = "fold-hide"}
+plot(final.lm, which = 5, id.n = 2)
+```
+\
+The observation 471 has been identified to have leverage 1, so that $\hat{y}_i = y_i$. This is peculiar, meaning that only observation itself influences its own prediction, all the other observations being irrelevant for this point. This is also maybe due to the inclusion of factors with multiple levels (making this observation an isolated point "one of the kind").
+
+* * *
+
+## Section 4.2 Final Model RMSE
+
+For your final model, calculate and briefly comment on the RMSE.
+
+* * *
+
+```{r final_model_rmse, class.source = "fold-hide"}
+d_norm.aug %>% mutate(final = final.pred, initial = initial.pred, y_bar = mean(price)) %>% 
+  pivot_longer(c(final, initial), names_to = "model", values_to = "prediction") %>% 
+  group_by(model) %>% 
+  summarize(
+    RMSE = sqrt( mean( (price - prediction) ^ 2 ) ), 
+    Rsq = 1 - RMSE ^ 2 / mean( (price - y_bar) ^ 2 )
+  ) %>% kable(digits = 4) %>% kable_styling("striped")
+```
+\
+The final model has lower RMSE and higher $R^2$ than our initial guess. The change is significantly different from zero (not surprisingly, given the small standard error and high statistical power) and is also consistent with the assumption that the difference is large (failed to reject $\Delta R^2 > 0.02$ in the TOST procedure for two models on the same training set).
+```{r, class.source = "fold-hide"}
+set.seed(6)
+sample_train_initial <- d_norm.aug %>% mutate(pred = initial.pred)
+sample_train_final <- d_norm.aug %>% mutate(pred = final.pred)
+Rsq.boot <- boot.stats(sample_train_final, sample_train_initial, Rsq)
+TOSTtwo.raw(
+  n1 = Rsq.boot$n1, m1 = Rsq.boot$m1, sd1 = Rsq.boot$sd1, low_eqbound = -0.02, 
+  n2 = Rsq.boot$n2, m2 = Rsq.boot$m2, sd2 = Rsq.boot$sd2, high_eqbound = 0.02,
+  verbose = FALSE, plot = TRUE
+)
+```
+
+
+* * *
+
+## Section 4.3 Final Model Evaluation
+
+What are some strengths and weaknesses of your model?
+
+* * *
+
+The linear model is relatively simple, and it is quite easy to understand how various predictors affect the expected price. From the prediction plot above, one can see that the model generalizes rather well on previously unseen data, explaining about 93\% of variation in response. Its results are more-or-less reliable across almost the whole price range.
+
+However, one can see that predictions become slightly more volatile for low prices (higher variance). Possibly, some other aspects (e.g., `Neighborhood`), that add little value in general, start playing higher role in this regime. The normal error assumptions also does not seem to be fully justified, because of heavier tails (for almost any model).
+
+* * *
+
+## Section 4.4 Final Model Validation
+
+Testing your final model on a separate, validation data set is a great way to determine how your model will perform in real-life practice. 
+
+You will use the “ames_validation” dataset to do some additional assessment of your final model. Discuss your findings, be sure to mention:
+* What is the RMSE of your final model when applied to the validation data?  
+* How does this value compare to that of the training data and/or testing data?
+* What percentage of the 95% predictive confidence (or credible) intervals contain the true price of the house in the validation data set?  
+* From this result, does your final model properly reflect uncertainty?
+
+```{r loadvalidation, message = FALSE}
+load("data/ames_validation.Rdata")
+```
+
+* * *
+
+Prepare the validation data set, filtering observations with NA and "new levels" (absent from the training sample).
+
+```{r model_validate, class.source = "fold-hide"}
+d_val <- ames_validation %>% prepare_data(
+  normal_sale = TRUE, to_factor = "MS.SubClass", remove = c("PID", imbalanced)
+) %>% handle_na(
+  filter_rows = "Bsmt.Full.Bath",  # 1 row removed
+  omit_cols = c("log_Lot.Frontage" , "Garage.Yr.Blt" ,"BsmtFin.Type.2", "Electrical")
+) %>% omit_unused( final.lm )  # 1 new level: MS.Zoning == "A (agr)"
+cat("Number of observations:", nrow(ames_validation), 
+    "\nHow many left:", nrow(d_val), "\nAll NA removed:", ! any(is.na(d_val)))
+```
+\
+About 93\% of the 95\% prediction intervals contain the true price of the house in the validation set, slightly less than expected, but still reflects uncertainty well.
+
+```{r final_model_validation, class.source = "fold-hide"}
+pred.HPM <- predict(final.bas, newdata = d_val, estimator = "HPM", se.fit = TRUE, nsim = 10 ^ 6)
+d_val.aug <- cbind(d_val, cbind(exp(confint(pred.HPM, parm = "pred")))) %>% 
+  mutate(resid = log(price) - log(pred))
+cover_prob <- summarize(d_val.aug, mean(price > `2.5%` & price < `97.5%`))[1,1]
+ggplot(d_val.aug, aes(x = log(price), y = log(pred))) + 
+  geom_ribbon(aes(ymin = log(`2.5%`), ymax = log(`97.5%`)), fill = "grey70", alpha = 0.7) + 
+  geom_abline(slope = 1, intercept = 0, size = 1, linetype = "dashed", color = "blue") +
+  geom_point(shape = 16, size = 2, alpha = 0.7) +
+  annotate("text", x = 12, y = 13, size = 5, label = paste("Coverage Probability:", round(cover_prob, 3))) +
+  labs(y = "Prediction", title = "Final Model Performance on the Validation Data")
+```
+\
+Two houses have been somewhat overvalued by our final model:
+```{r}
+EnvStats::rosnerTest( d_val.aug$resid )$all.stats
+```
+```{r, class.source = "fold-hide"}
+d_val.aug %>% tibble::rownames_to_column(var = "idx") %>% arrange(desc(resid ^ 2)) %>% head(3) %>% 
+  kable() %>% kable_styling("striped") %>% scroll_box(width = "100%")
+```
+\
+The accuracy of prediction, as measured by RMSE or $R^2$, is also a little bit lower than previously calculated using test or train data:
+
+```{r, class.source = "fold-hide"}
+d_val.aug %>% summarize(
+  RMSE = sqrt( mean( (price - pred) ^ 2 ) ), 
+  Rsq = 1 - RMSE ^ 2 / mean( (price - mean(price)) ^ 2 )
+) %>% kable(digits = 4) %>% kable_styling("striped")
+```
+\
+Should we be alarmed by this difference in performance? For instance, if one takes the test RMSE as an estimate of the "true" error rate, the results are well within the natural sampling variability (`|dm| < sd2`, so that one is likely to pass the equivalence test with a very mild $\Delta$).
+
+```{r, class.source = "fold-hide"}
+set.seed(6)
+sample_test_final <- d_test.aug %>% mutate(pred = final.pred)
+RMSE.boot <- boot.stats(d_val.aug, sample_test_final, RMSE)
+as.data.frame(RMSE.boot) %>% kable(digits = 4) %>% kable_styling("striped") 
+```
+\
+On the other hand, the difference between validation and training set $R^2$ scores is expectedly larger, but is still reliably within our conjectured 2\% bound.
+```{r, class.source = "fold-hide"}
+set.seed(6)
+Rsq.boot <- boot.stats(d_val.aug, sample_train_final, Rsq)
+TOSTtwo.raw(
+  n1 = Rsq.boot$n1, m1 = Rsq.boot$m1, sd1 = Rsq.boot$sd1, low_eqbound = -0.02, 
+  n2 = Rsq.boot$n2, m2 = Rsq.boot$m2, sd2 = Rsq.boot$sd2, high_eqbound = 0.02,
+  verbose = FALSE, plot = TRUE
+)
+```
+
+* * *
+
+# Part 5 Conclusion
+
+Provide a brief summary of your results, and a brief discussion of what you have learned about the data and your model. 
+
+* * *
+
+I have fitted two models, predicting house prices for the normal condition of sale. The final model with 20 variables (including 5 two-way interactions) provides only a slight improvement over the initial one with just 10 predictors, which is already a quite accurate fit ($R^2_\text{train} = 0.92$). All coefficients turn out to be statistically significant (even if only as interaction terms). I have found that prediction errors are somewhat over-dispersed, having heavier tails than the normal distribution assumption, however, in the absence of highly influential outliers, the OLS linear regression is our best bet.
+
+The *model comparison*, based on the *relative* differences in a chosen measure of out-of-sample performance (such as various information criteria, or cross-validation average error rate), provides advice about how confident we might be about the models (conditional on the set of models compared). Using either the raw RMSE (in dollars), or $R^2$ percentage of variance explained, the model generalizes reasonably well on previously unseen data. (Of course, the expert-knowledge of the market and the goal is required in order to judge the desired accuracy.) 
+
+Being a random variable itself, the given statistic is accompanied by sampling variability. To assess the uncertainty around point estimates, I have used the *bootstrap* resampling techniques. Instead of the usual "strict zero" NHST, I have adopted the lesser-known *equivalence testing* procedure to discard the hypothesis of train/test drop in performance $\Delta R^2 > 0.02$. I am not aware of other previous uses of equivalence tests to gauge the generalization gap in a model selection context, as above, but my knowledge of this topic may be limited though.
+
+* * *

@@ -1,0 +1,928 @@
+---
+title: "Prediction of IMDB Movie Scores (Not Using RT)"
+subtitle: "\"Linear Regression and Modeling\" Project"
+author: "Vadim Belov"
+output: 
+  html_document: 
+    code_folding: hide
+    toc: true
+    toc_depth: 3
+    fig_height: 4
+    highlight: pygments
+    theme: spacelab
+---
+
+## Setup
+
+The code chunks are hidden by default, for easier reading. You can freely unfold them at will, by clicking on "code" tab.
+
+```{css, echo=FALSE}
+pre {
+  max-height: 430px;
+  overflow-y: auto;
+}
+```
+
+```{r setup, echo = FALSE}
+knitr::opts_chunk$set(
+  fig.width = 11,
+  fig.asp = 0.618,
+  out.width = "90%",
+  fig.align = "center",
+  knitr.table.align = "r"
+)
+ggplot2::theme_update(
+  plot.title = ggplot2::element_text(hjust = 0.5, face = "bold")
+)
+#library(printr)     # nicer tabular output
+#options(knitr.table.NA = "")
+```
+
+### Task
+
+Describe movies dataset and perform EDA. Develop a multiple linear regression model to predict a numerical variable, that describes movie's popularity. Do a prediction for previously unseen data (cf. [project requirements](requirements/info3_reg_model.md)).
+
+### Load packages
+
+```{r load-packages, message = FALSE, class.source = "fold-show"}
+library(ggplot2)    # graphics
+library(gridExtra)  # multiple side-by-side ggplot's
+library(GGally)     # pairwise correlation plots
+library(dplyr)      # data manipulation
+library(tidyr)      # data cleaning and representation change
+library(forcats)    # modify factor levels
+library(e1071)      # compute central moments (skewness and kurtosis)
+library(leaps)      # model selection tools
+```
+
+### Load data
+
+```{r load-data, class.source = "fold-show"}
+load("data/movies.Rdata")
+```
+
+* * *
+
+## Part 1: Data
+
+The data set is comprised of 651 randomly sampled movies, produced and released before 2016. The information on the movies has been gathered, in particular, from [Rotten Tomatoes](https://www.rottentomatoes.com/) and [IMDB](https://www.imdb.com/).
+
+**Generalizability:** Random sampling implies that the results of analysis, derived from these data, can be generalized to the population of interest (movies released before 2016). 
+
+**Causality**: Since no random assignment has been employed, this study is purely *observational* in nature and does not guarantee causal inferences. Strictly speaking, one can only identify the possible association between variables (but not necessarily the causal dependencies), using variation in the collected data samples. 
+
+There are not enough details on the data collection to judge about the possible sources of biases. The quality and fullness of the database is crucial here, as only the movies which have a record are available for the study.
+
+* * *
+
+## Part 2: Research Question
+
+We are interested in learning what attributes make a movie popular. In particular, **which features are most useful for predicting success of the movie, for instance, judged by the audience reception?** *(That is, we want to predict the movies score, based on its attributes; but we would also like to find a reasonably "small" models, which are good at explaining the relationship between the response and the predictors.)* This can present an interest as for regular movie-goers, but also serve as useful information and important incentive for studio executives, or people in the industry. Lets peek at our variables:
+
+```{r}
+names(movies)
+```
+
+Unfortunately, there is no information in the dataset about box office or video sales (except only the binary `top200_box` variable), which would be of prime importance to guide financial, marketing, or artistic decisions. Instead, as a measure of the movie's success we can use its scoring on film review aggregator websites, represented by 3 numerical (`imdb_rating`, `audience_score`, `critics_score`) and 2 categorical (`audience_rating`, `critics_rating`) variables. We may either choose one of them as our target response variable, or create an aggregated one.
+
+
+* * *
+
+## Part 3: Exploratory Data Analysis
+
+### Target Variable(s)
+
+First, let us inspect how various measures of the movie's success relate to each other. The summary statistics for the candidate variables are as follows:
+```{r pairwise-scores, fig.asp = 1, message = FALSE}
+movie_scores <- movies %>% 
+  select(imdb_rating, audience_score, critics_score, audience_rating, critics_rating)
+summary(movie_scores)
+# Draw pairwise associations
+ggpairs(
+  movie_scores, 
+  lower = list(continuous = wrap("points", alpha = 0.5, size = 1))
+) +
+  theme(
+    axis.text.x = element_text(angle = -90, hjust = 0, vjust = 0),
+    axis.text = element_text(size = 8)
+  ) +
+  labs(title = "Comparison of Ratings at IMDB and RT")
+```
+
+For completeness, we have also included categorical RT ratings in a pairwise plot. From the side-by-side boxplots, the audience rating seems to be just the threshold on the audience score, and similarly the "Rotten" rating from critics. However critics' scores for "Fresh" and "Certified Fresh" categories overlap quite a bit. In any case, as a target variable, the classification by discrete ratings with few levels (e.g., using logistic regression) seems to be more restrictive than the estimate for a numeric score, that takes continuous range of values. In principle, one could use discrete RT ratings as quite reliable predictors of a movie score. However, it would be awkward to make a "prediction" of one form of rating based on the other. *We, therefore, choose to challenge ourselves and omit those discrete variables.*
+
+One can see the high correlation 0.865 between IMDB and RT's audience scores, as well as slightly lower (but still quite strong 0.765 and 0.704) correlations with critics' score. In addition, we can ask how much do various scores differ across movies. For instance, calculate the sample proportion of movies, for which two audience scores (properly normalized) differ, say, by 20%:
+
+```{r IMDB-vs-RT}
+# To be able to compare, first normalize scores so that they lie in the same range 
+normalize <- function(x) ( x - min(x) ) / ( max(x) - min(x) )
+normalized_scores <- select_if(movie_scores, is.numeric) %>% 
+  mutate( across(everything(), normalize) )
+sum(abs(normalized_scores$imdb_rating - normalized_scores$audience_score) > 0.2) / nrow(movie_scores)
+```
+These results are reassuring, since we can assume that movies are rated more or less coherently by different sources. From the diagonal plots, the distributions of `audience_score` and `crtics_score` are strongly left-skewed with two pronounced "humps" (bi-modal). **We choose `imdb_rating` as our response variable**, since its distribution appears to be closer to the normal "bell-shaped" curve. Though, it still demonstrates a noticeable left skew:
+```{r, class.source = "fold-show"}
+( skew <- e1071::skewness(movies$imdb_rating) )
+```
+We perform some visual inspection to see how strongly IMDB scores deviate from the normal distribution.
+
+```{r IMDB-skew}
+histogram_imdb <- ggplot(movies, aes(x = imdb_rating)) +
+  geom_histogram(aes(y = ..density..), binwidth = 0.5, col = "white", alpha = 0.3) +
+  geom_density(aes(col = "Data"), size = 1, fill = "mediumseagreen", alpha = 0.15) + 
+  stat_function(
+    aes(col = "Normal"), size = 1,
+    fun = dnorm, args = list(mean = mean(movies$imdb_rating), sd = sd(movies$imdb_rating))
+  ) + 
+  scale_color_manual(NULL, values = c("seagreen", "red")) + 
+  scale_x_continuous(breaks = seq(2, 9, by = 0.5), expand = c(0.02, 0.02)) + 
+  theme(panel.grid.major.x = element_blank(), legend.position = c(0.2, 0.9)) +
+  annotate("text", x = 3.3, y = 0.315, label = paste("Skewness:", round(skew, 3))) +
+  labs(title = "Histogram", x = "IMDB rating", y = "Probability Density")
+qqnorm_imdb <- ggplot(movies, aes(sample = imdb_rating)) + 
+  stat_qq(size = 2, shape = 21) + stat_qq_line()+
+  labs(title = "Normal Q-Q Plot", x = "Theoretical Quantiles", y = "Sample Quantiles")
+grid.arrange(histogram_imdb, qqnorm_imdb, ncol = 2)
+```
+From the quantile-quantile plot, the data in our sample does not satisfy the normality assumption. However, we can rectify this and **derive the new score `imdb_norm`**, by performing a form of log-transformation on our data.
+
+```{r imdb-transformation}
+transform_response <- function(x, fixed_range = TRUE) {
+  max_x <- ifelse(fixed_range, 9, max(x))   # sample range is sensitive to outliers
+  return( log10( max_x + 1 - x ) )
+}
+get_imdb <- function(y) 10 - 10 ^ y   # inverse transformation to IMDB scale [1,10]
+ggplot(data.frame(x = c(-1, 1)), aes(x = x)) + 
+  stat_function(fun = get_imdb) + 
+  labs(title = "Transformation of Response Variable", x = "New Scale", y = "IMDB Scale")
+```
+
+We can derive the original IMDB rating from the predicted `imdb_norm` score, using the inverse formula:
+$$\texttt{imdb_rating} = 10 - 10^\texttt{imdb_norm}$$
+
+Given possible values of the IMDB rating $[1,10]$, the new score varies in the range $(-\infty, 1]$ (unbounded from below). One could have adjusted it to lie between 0 and 1, at the expense of slightly less intuitive expression and data being less "normal-like". There is little gain though, since theoretically best rating of 10 (corresponding to arbitrarily small `imdb_norm`) is practically unattainable anyway. Indeed, the № 1 movie on the [list](https://www.imdb.com/search/title/?groups=top_100&sort=user_rating,desc&view=simple) is rated 9.3, which corresponds to `imdb_norm = -0.155`.
+
+Lets check that the new scores are indeed normally distributed.
+
+```{r IMDB-normal}
+imdb_norm <- transform_response(movies$imdb_rating)
+histogram_imdb <- ggplot(as.data.frame(imdb_norm), aes(x = imdb_norm)) +
+  geom_histogram(aes(y = ..density..), binwidth = 0.05, col = "white", alpha = 0.3) +
+  geom_density(aes(col = "Data"), size = 1, fill = "mediumseagreen", alpha = 0.15) + 
+  stat_function(
+    aes(col = "Normal"), size = 1,
+    fun = dnorm, args = list(mean = mean(imdb_norm), sd = sd(imdb_norm))
+  ) +
+  scale_color_manual(NULL, values = c("seagreen", "red")) + 
+  annotate(
+    "text", x = 0.15, y = 2.7,
+    label = paste("Skewness:", round(skewness(imdb_norm), digits = 3))
+  ) +
+  theme(legend.position = c(0.2, 0.9)) +
+  labs(title = "Histogram", x = "Transformed IMDB Rating", y = "Probability Density")
+qqnorm_imdb <- ggplot(as.data.frame(imdb_norm), aes(sample = imdb_norm)) + 
+  stat_qq(size = 2, shape = 21) + stat_qq_line() +
+  labs(title = "Normal Q-Q Plot", x = "Theoretical Quantiles", y = "Sample Quantiles")
+grid.arrange(histogram_imdb, qqnorm_imdb, ncol = 2)
+```
+
+The data appears almost symmetric now, and, judging by the Q-Q plot, it largely follows the normal distribution. Even though for a large sample size (n > 200), statistical tests can detect even small but meaningless departures from normality, we can nevertheless perform the [Shapiro-Wilk test](https://en.wikipedia.org/wiki/Shapiro%E2%80%93Wilk_test), for instance:
+
+```{r Shapiro-Wilk-norm}
+shapiro.test(imdb_norm)
+```
+
+Using the concordance significance level $\alpha = 0.05$, the high p-value corroborates the null-hypothesis, namely, that the population is normally distributed. Compare this to the results of the test, performed on the original un-transformed data: 
+
+```{r Shapiro-Wilk-skew}
+shapiro.test(movies$imdb_rating)
+```
+
+We construct the design matrix to include only relevant target variable `imdb_norm` and all potentially useful predictors, that will be considered for the model. Therefore, we can safely omit dummy variables (like `title` or URL) and those clearly useless for prediction (such as actor or director), that cannot be generalized to the population.
+
+```{r design-matrix}
+# During analysis, I have identified a couple of genre mis-classifications (there are probably more)
+movies[movies$title == "Bats", "genre"] <- "Horror"
+movies[movies$title == "Battlefield Earth", "genre"] <- "Science Fiction & Fantasy"
+movies[movies$title == "Epic Movie", "genre"] <- "Comedy"
+movies[movies$title == "Vampire Hunter D: Bloodlust", "genre"] <- "Animation"
+movies[movies$title == "Viva Knievel!", "genre"] <- "Action & Adventure"
+design <- movies %>% 
+  select(-c(title, studio, imdb_rating, critics_rating:audience_score, director:rt_url)) %>% 
+  mutate(imdb_norm = imdb_norm, .before = 1)   # target variable on the first position
+```
+
+```{r glimpse-design, class.source = "fold-show"}
+glimpse(design)
+```
+
+### Missing Values
+
+Lets take care of missing values that we may have in our data.
+```{r}
+knitr::kable(design[!complete.cases(design), colSums(is.na(design)) > 0])
+```
+
+There can be no movie without runtime:
+```{r}
+filter(movies, is.na(runtime)) %>% knitr::kable() %>% 
+  kableExtra::kable_styling("striped") %>% kableExtra::scroll_box(width = "100%")
+```
+In fact, we can manually correct this erroneous data entry
+```{r}
+movies[movies$title == "The End of America", "runtime"] <- 74
+design[is.na(design$runtime), "runtime"] <- 74
+```
+
+On the other hand, there should be more than enough movies without dvd release. In principle, we could omit these data points as well, but there is a better way to handle dvd release date information, as will become clear shortly.
+
+
+### Numerical Predictors
+
+Lets check pairwise associations of numeric predictors with response and among each other (including also dates of release in theater and on dvd).
+```{r pairwise-numeric, fig.asp = 1, warning = FALSE}
+ggpairs(
+  data = select_if(design, is.numeric), 
+  lower = list(continuous = wrap("points", alpha = 0.5, size = 1))
+) +
+  theme(
+    axis.text.x = element_text(angle = -90, hjust = 0, vjust = 0),
+    text = element_text(size = 8),
+    plot.title = element_text(size = 14)
+  ) +
+  labs(title = "Pairwise Correlations of Numerical Variables")
+```
+
+From the first row, the moderate (and significant) correlation of response with `runtime` and `imdb_num_votes` suggests these variables as potentially important (numerical) predictors. Their relationship with response will look more linear (and less stretched out) on the respective scatterplots, if we correct for very high right skewness of the data, seen on the corresponding diagonal plots. But first I identify particularly extreme `runtime` lengths:
+
+```{r runtime-outliers}
+movies %>% 
+  filter( ! between(runtime, 60, 210) ) %>% 
+  select(title, title_type, runtime, imdb_num_votes, imdb_rating, audience_score, critics_score) %>% 
+  arrange(imdb_rating) %>% 
+  knitr::kable() %>% kableExtra::kable_styling("striped")
+```
+\
+I choose to remove 2 very short documentaries as clear outliers and do not consider titles shorter than, say, 60 min. (The 3rd long one turns out to be not so far off on the transformed distribution.) After passing to the inverse of a runtime, that we call `quickness = 1 / runtime`, the data appears more symmetric. 
+
+```{r runtime-transformation, fig.asp = 1, message = FALSE}
+design <- filter( design, runtime > 60 ) %>%
+  mutate(quickness = 1 / runtime, .keep = "unused")
+inverse_runtime <- ggplot(movies, aes(x = runtime)) + 
+  stat_function( fun = function(x) 1 / x ) + 
+  labs(title = "Variable Transformation", x = "Runtime of a Movie", y = "Quickness = 1 / Runtime")
+
+# Plot the transformed distribution
+quickness_hist <- ggplot(design, aes(x = quickness)) +
+  geom_histogram(aes(y = ..density..), binwidth = 0.001, col = "white", alpha = 0.3) +
+  geom_density(aes(col = "Data"), adjust = 1, size = 1, fill = "mediumseagreen", alpha = 0.15) + 
+  stat_function(
+    aes(col = "Normal"), size = 1,
+    fun = dnorm, args = list(mean = mean(design$quickness), sd = sd(design$quickness))
+  ) +
+  scale_color_manual(NULL, values = c("seagreen", "red")) +
+  theme(legend.position = c(0.15, 0.9)) +
+  annotate(
+    "text", x = 0.005, y = 215,
+    label = paste("Skewness:", round(skewness(design$quickness), digits = 3))
+  ) +
+  labs(title = "Histogram", x = "Movie's Quickness", y = "Probability Density")
+quickness_qqnorm <- ggplot(design, aes(sample = quickness)) + 
+  stat_qq(size = 2, shape = 21) + stat_qq_line()+
+  labs(title = "Normal Q-Q Plot", x = "Theoretical Quantiles", y = "Sample Quantiles")
+
+grid.arrange( inverse_runtime, quickness_hist, quickness_qqnorm, layout_matrix = rbind(c(1), c(2,3)) )
+```
+
+For `imdb_num_votes` we perform simple log-transformation. From the following plots, the new distribution is symmetric but somewhat under-dispersed with thinner tails (negative excess kurtosis, Q-Q plot displays an S-shaped curve).
+
+```{r log_votes-distribution, message = FALSE}
+design <- mutate(design, 
+  log_votes = log(imdb_num_votes), .keep = "unused"
+)
+# Plot the distribution of the transformed variable
+logvotes_hist <- ggplot(design, aes(x = log_votes)) +
+  geom_histogram(aes(y = ..density..), binwidth = 0.5, col = "white", alpha = 0.3) +
+  geom_density(aes(col = "Data"), adjust = 1, size = 1, fill = "mediumseagreen", alpha = 0.15) + 
+  stat_function(
+    aes(col = "Normal"), size = 1,
+    fun = dnorm, args = list(mean = mean(design$log_votes), sd = sd(design$log_votes))
+  ) +
+  scale_color_manual(NULL, values = c("seagreen", "red")) +
+  theme(legend.position = c(0.15, 0.9)) +
+  annotate(
+    "text", x = 6, y = 0.2,
+    label = paste("Kurtosis:", round(kurtosis(design$log_votes), digits = 3))
+  ) +
+  labs(title = "Histogram", x = "Logarithm of Number of Votes on IMDB", y = "Probability Density")
+logvotes_qqnorm <- ggplot(design, aes(sample = log_votes)) + 
+  stat_qq(size = 2, shape = 21) + stat_qq_line()+
+  labs(title = "Normal Q-Q Plot", x = "Theoretical Quantiles", y = "Sample Quantiles")
+grid.arrange(logvotes_hist, logvotes_qqnorm, ncol = 2)
+```
+
+Next, the highest degree of correlation is between years of release in theater and on dvd, which is a potential source of collinearity in our model. However, instead of simply dropping `dvd_rel_year`, we observe the two clusters on their respective scatterplot, only one of which is responsible for correlation. We therefore choose to create the binary variable, specifying the cluster to which movie belongs:
+```{r, class.source = "fold-show"}
+design <- mutate(design,
+  dvd_lag = as.factor( ifelse( dvd_rel_year - thtr_rel_year > 4 | is.na(dvd_rel_year), "Yes", "No" ) )
+) %>% 
+  select(-c(dvd_rel_year:dvd_rel_day))
+```
+
+The chosen value of a "lag" between release in theaters and on dvd leads to the maximum of correlation in category with "No" lag (straight line on the scatterplot), and minimizes it in the second diffuse "Yes" cluster. After accounting for `dvd_rel_year`, using almost perfect correlation with `thtr_rel_year` in the first category, we omit dvd release date from consideration altogether. (We also partially keep information about `dvd_rel_year` in moderate negative correlation with `imdb_num_votes`, which is maximized for "Yes", and almost 0 for "No" `dvd_lag`: "The earlier such movie was released on dvd, the larger number of votes it has accumulated, on average.") There is no reason to suspect month or day of dvd release can be any reliable predictors of a movie score. On the other hand, we still keep the full theatrical release date, since movie premieres are known for its seasonality (some periods are better than others in terms of box office). If movie does not have release on dvd (yet), we formally allocate it to the "Yes" category.
+
+It is possible to show that two peaks in number of votes and runtime distributions nicely correspond to two categories of `dvd_lag`, thus proving its usefulness. We can also see the correlations between transformed variables and within groups.
+
+```{r , fig.asp = 1, warning = FALSE}
+ggpairs(mapping = aes(col = dvd_lag, alpha = 0.3),
+  data = design %>% 
+    select(imdb_norm, quickness, log_votes, thtr_rel_year, dvd_lag), 
+  columns = 1:4,
+  lower = list(continuous = wrap("points", alpha = 0.5, size = 1))
+) +
+  theme(
+    axis.text.x = element_text(angle = -90, hjust = 0, vjust = 0),
+    text = element_text(size = 8),
+    plot.title = element_text(size = 14)
+  ) +
+  labs(title = "Pairwise Correlations of Numerical Variables")
+```
+
+
+### Categorical Predictors
+
+Compute summary statistics:
+```{r}
+summary( select_if(design, is.factor) )
+```
+We can also plot our numeric response against each of the individual categorical predictors, using side-by-side boxplots.
+```{r categorical-predictors, message = FALSE}
+design %>% 
+  select_if(is.factor) %>% 
+  cbind(imdb = design$imdb_norm) %>% 
+  pivot_longer(1:9, names_to = "predictor", values_to = "category") %>% 
+  ggplot(aes(x = imdb, y = category)) +
+  geom_boxplot() +
+  facet_wrap( ~ predictor, ncol = 3, scales = "free") +
+  labs(x = "IMDB Rating", y = NULL, title = "Categorical Predictors for Movie Score") +
+  theme(axis.text = element_text(size = 6))
+```
+
+We can see that whether or not one of the main actors/actresses in the movie ever won an Oscar has very little or no relevance for the movie score on its own. Since these variables are similar in nature, we can lump them together for simplicity into `awards_team`. On the other hand, the nomination or winning the best picture Oscar appear to be quite reliable predictors (although sample is imbalanced), but they overlap almost fully, with only one misclassification ("won, but no nomination"): 
+```{r weird}
+filter(movies, best_pic_win == "yes" & best_pic_nom == "no") %>%
+  knitr::kable() %>% kableExtra::kable_styling("striped") %>% kableExtra::scroll_box(width = "100%")
+```
+
+Note that some categories contain very few data points, such as rating NC-17 (plus "TV Movie" title type has huge variance of scores, as result), so we can merge some factor levels together:
+```{r lump-factors, class.source = 'fold-show'}
+design <- mutate(design, 
+  title_type = fct_collapse(title_type, `Feature or TV` = c("Feature Film", "TV Movie")),
+  mpaa_rating = fct_collapse(mpaa_rating, `R or NC-17` = c("R", "NC-17")),
+  awards_team = as.factor( ifelse(
+    best_actor_win == "yes" | best_actress_win == "yes" | best_dir_win == "yes", "Yes", "No") ),
+  awards_pic = as.factor( ifelse(best_pic_nom == "yes" | best_pic_win == "yes", "Yes", "No") ), 
+  .keep = "unused"
+)
+```
+
+
+### Non-Linear Effects
+
+One of conditions to fit linear regression model is that predictors are linearly associated with response variable. However, we can see non-linear trend on the `imdb_norm vs log_votes` scatterplot for both higher and lower number of votes. Part of it can be explained by conditioning on movie type:
+```{r, message = FALSE}
+ggplot( design, aes(y = imdb_norm, x = log_votes, col = title_type)) + 
+  geom_point(shape = 16, size = 2, alpha = 0.5) + 
+  geom_smooth(formula = y ~ x, method = "loess") +
+  labs(title = "Non-linear Dependence", x = "Log of Votes", y = "IMDB Score")
+```
+
+The trend is approximately linear for two types until the number of votes approaches about trillion, after which the new regime takes its turn. If one does not wish to include non-linear effects, for the sake of interpretability, one could fit two different slopes (linear coefficients in a multiple regression). In the absence of any natural grouping, analogous to `title_type` in the lower region, one has to introduce an artificial threshold on number of votes. This lead to the piecewise linear approximation, equivalent to a first order spline with one knot:
+$$y = \beta_0 + \beta_1 x +\beta_2 (x - k)_+ + ..., \qquad \mbox{where} \quad (x - k)_+ = \begin{cases}
+        x - k, & \text{for } x > k \\
+        0, & \text{for } x < k
+        \end{cases} $$
+
+I used truncated power series parameterization, which is easier to interpret than B-splines. On the plot we see, that it largely captures the curved trend in the upper `log_votes` range. However, there remains some outlying observations, especially, for higher `imdb_norm` (lower `imdb_rating`) values.
+
+```{r piecewise-diagnostics, fig.asp = 1, message = FALSE}
+piecewise <- function(x, thresh = 11.33) {
+  x_diff <- (x - thresh) * ifelse(x > thresh, 1, 0)
+  return( cbind(x, x_diff) )
+}
+piecewise_fit <- lm(imdb_norm ~ title_type + piecewise(log_votes), design)
+summary(piecewise_fit)
+# Plot the resulting fitted curves and residuals
+piecewise_pred <- ggplot(
+  data =  design %>% cbind(predict(piecewise_fit, design, interval = "confidence")), 
+  aes(y = imdb_norm, x = log_votes, col = title_type, legend = "top")
+) + 
+  geom_point(shape = 16, size = 2, alpha = 0.5) + 
+  geom_smooth(formula = y ~ x, method = "loess", se = TRUE, linetype = "longdash", alpha = 0.2) +
+  geom_line(aes(x = log_votes, y = fit), linetype = "solid", size = 1.5) + 
+  geom_ribbon(aes(ymin = lwr, ymax = upr, fill = title_type), linetype = "dotted", alpha = 0.25) +
+  geom_vline(xintercept = 11.33, linetype = "dashed") +
+  labs(title = "Piecewise-linear Approximation", x = "Log of Votes", y = "IMDB Score")
+piecewise_resid <- ggplot(
+  design %>% mutate(resid = piecewise_fit$residuals), aes(x = log_votes, y = resid)) + 
+  geom_point(shape = 16, size = 2, alpha = 0.5) + 
+  geom_smooth(formula = y ~ x, method = "loess") +
+  labs(x = "Log of Votes on IMDB", y = "Residuals", title = "Partial Piecewise Fit: Residuals")
+piecewise_qqnorm <- ggplot(design %>% mutate(resid = piecewise_fit$residuals), aes(sample = resid)) + 
+  stat_qq(size = 2, shape = 21) + stat_qq_line()+
+  labs(title = "Normal Q-Q Plot", x = "Theoretical Quantiles", y = "Sample Quantiles")
+grid.arrange( piecewise_pred, piecewise_resid, piecewise_qqnorm, layout_matrix = rbind(c(1), c(2,3)) )
+```
+
+In principle, one could also fit two different lines in a lower region, by means of an interaction term `title_type * log_votes`. This would make our approximation align even closer to `loess` curve visually, but does not lead to any significant improvement in predictive power. One could further account for non-linearity by introducing polynomial features, or higher order splines, which would make our model even more flexible but less interpretable. One has to decide whether a possible gain in accuracy worth the effort. 
+
+**A short digression** (can skip to Part 4): [Should one choose "raw" monomials `I(x^n)` or orthogonal polynomials?](https://stackoverflow.com/questions/29999900/poly-in-lm-difference-between-raw-vs-orthogonal) Orthogonalization has the effect of removing unwarranted collinearity among different order components. The cost is the loss in interpretability, since coefficients in orthogonal polynomials represent completely different quantities from that of their "raw" counterpart. However, when trying to get the same quantities from both regressions, the estimates and standard errors will be identical. 
+
+[The key difference is the following](https://stats.stackexchange.com/questions/258307/raw-or-orthogonal-polynomial-regression): using orthogonal polynomials allows you to isolate the contribution of each term to explaining variance in the outcome (e.g., as measured by the squared semipartial correlation). This has the advantage that you can see whether a certain order in the polynomial significantly improves the regression over the lower orders. In particular, in the absence of correlations between orthogonal components the lower order coefficients (and their significance) won't change when we add higher order coefficients (or they stay roughly the same, *if everything else held fixed*). 
+
+*About possible interpretation:* If one really wanted to, by completing the square (cube, etc), the polynomial could be re-written as a product
+$$\beta_1 X_1 + \beta_2 X_1^2 + ... + \beta_d X_1^d = \beta_0 + \beta_d \prod_{j=1}^d (X_1 - c_j)$$
+One could then say that $\beta_d$ was the change in the response for a one-unit change in a latter product, etc. But the sampling distributions of the roots $c_j$, as functions of $\beta_i$, would itself be very tricky, as well as the meaning of such new feature (so this is often a considerable amount of work for little gain).
+
+For the above mentioned reasons, I choose to consider orthogonal `poly()`. Compare, for instance, two partial models, fitting polynomials of degree 3 and 4, respectively:
+```{r}
+poly3_fit <- lm(imdb_norm ~ title_type + poly(log_votes, 3), design)
+summary(poly3_fit)
+poly4_fit <- lm(imdb_norm ~ title_type + poly(log_votes, 4), design)
+summary(poly4_fit)
+anova(poly4_fit, piecewise_fit)
+```
+
+The 4th order term leads to significant improvement over the 3rd order polynomial fit, but no big difference with the piecewise linear approximation. Since "the power of logarithm of number of votes" is already hard enough to interpret, we prefer to stick with more tractable piecewise linear model. I choose to encode the additional truncated power term separately as a new feature in our data:
+```{r, class.source = 'fold-show'}
+design <- mutate(design,
+  votes_boost = (log_votes - 11.33) * ifelse(log_votes > 11.33, 1, 0)
+)
+```
+
+
+* * *
+
+## Part 4: Modeling
+
+Let us find the variables that constitute the best predictive model of the movie's IMDB rating, using multiple linear regression. According to this task, we are interested in model's accuracy in the first place (and not the inference for various predictors per se, based on p-values). To find small and interpretable models, we would use selection criterion that explicitly penalize larger models, such as an **adjusted $R^2$** (other common choices are AIC, BIC, $C_p$). This has an advantage of not depending on the pre-set arbitrary significance level for predictor coefficients.
+
+Different selection approaches generally give similar but not identical models. In principle, the best subset selection method compares models with various combinations of $p$ features to find the one which is *best*, according to some criteria. In particular, if one considers *all* possible $\binom{p}{k}$ models with exactly $k$ predictors, it would require to fit $2^p$ models in total, and quickly becomes too computationally expensive as the number of features $p$ grows. Instead, we choose to perform the **backward stepwise selection**, which explores a far more restricted set of models, searching only through $1+p(p+1)/2$ possible combinations of features.
+
+In backwards selection approach, one starts with the full linear model, containing *all* available predictors, and then consequently removes them, in contrast to alternative forward selection strategy, where we add features one by one. Hopefully, this might help us avoid drawbacks of "suppressor effects", when some of the variables are only significant when another predictor is held constant.
+
+Note that one can proceed in two fundamentally different ways, according to how one address discrete predictors. First, one can treat such variables "nominally", and thus compare only models that differ by presence of factor as a whole (even though technically all levels are realized through indicator variables). On the other hand, each factor with $l$ levels is encoded via $l-1$ indicator variables (with respect to single reference level), thus contributing "effective" degrees of freedom, that can be fitted separately. It is curious to compare two strategies and the resulting best fit models.
+
+### 1st Strategy: Keep Factors ("Nominal")
+
+At each step $k=p,p-1,...,1$ of backwards selection method one chooses best among $k-1$ models with one of predictors removed, that minimizes residual sum of squared error (or maximizes $R^2$). The automated algorithms like `fastbw()` (from `rms` package) or `step()` (from `stats` package), terminate when none of subset models leads to improvement in the AIC goodness-of-fit measure. This stopping rule can result in complicated models for high number of parameters, while less verbose models can turn out just about as good. For this reason, I implement the search for best model "from scratch", with the aid of some helper functions.
+```{r get-best-subsets}
+# Given a vector of predictors x, return matrix, where each column is a parse model with 1 predictor removed 
+get_subsets <- function(x) {
+  k <- length(x)
+  x_times <- rep(x, times = k)
+  x_each <- rep(x, each = k)
+  X <- matrix(x_times[x_times != x_each], nrow = k - 1)
+  return(X)
+}
+# For each subset of predictors, fit corresponding models and find the best one
+get_best <- function(X, y, data, measure = "adj.r.squared", max = TRUE) {
+  rhs <- apply(X, 2, paste, collapse = "+")
+  formulas <- paste(y, rhs, sep = "~ ")
+  models <- lapply(formulas, function(f) lm(f, data = data))
+  scores <- sapply(models, function(m) summary(m)[[measure]])
+  if ( max ) {
+    idx <- which.max(scores)
+    return( list(score = scores[idx], variables = X[ , idx]) )
+  } else {
+    idx <- which.min(scores)
+    return( list(score = scores[idx], variables = X[ , idx]) )
+  }
+}
+```
+
+So far we considered only additive models, where the association between a predictor $X_j$ and the response does not depend on the values of other predictors. I have only commented that the interaction between `title_type` and `log_votes` does not result in significant improvement. However, without an explanatory theory for which effects might be important for movie's popularity, **lets include also all possible 2-way interactions $X_i\times X_j$ in the full model**.
+```{r interactions}
+# Take 2 vectors of features and return their pairwise unique interaction products
+interact <- function(left, right, .sep = ":") {
+  filter_right <- right[ !(right %in% left) ]
+  M1 <- sapply( filter_right, function(x) paste(left, x, sep = .sep) )
+  interactions1 <- as.vector( unlist(M1) )
+  overlap <- right[ right %in% left ]
+  if ( length(overlap) == 0 ) {
+    return( interactions1)
+  } else {
+    filter_left <- left[ !(left %in% right) ]
+    M2 <- sapply( filter_left, function(x) paste(x, overlap, sep = .sep) )
+    M3 <- sapply( overlap, function(x) paste(x, overlap, sep = .sep) )
+    interactions2 <- as.vector( unlist(M2) )
+    interactions3 <- as.vector( unlist(M3[lower.tri(M3)]) )
+    return( c(interactions1, interactions2, interactions3) )
+  }
+}
+```
+
+```{r, class.source = 'fold-show'}
+# Avoid categorical-categorical interaction terms
+cats <- names(select_if(design, is.factor))
+nums <- names(select_if(design, is.numeric))[-1]
+interactions <- interact(nums, c(nums, cats))
+all_predictors <- c(cats, nums, interactions)
+# Check for linear dependencies in the full model (technically, each factor level is a separate column)
+rhs_p <- paste(all_predictors, collapse = " + ")
+expand_factors <- model.matrix(formula(paste("~ imdb_norm +", rhs_p)), data = design)
+( full_model_lindeps <- plm::detect.lindep(expand_factors, suppressPrint = TRUE) )
+```
+From an interpretation standpoint, one should follow **hierarchy rules** -- that is, any time a "higher-order" term is in a model, the related "lower-order" terms (main effect) have to be included as well, even if sometimes they are mathematically irrelevant (statistically non-significant). In terms of coefficient estimates, the interpretation of the interaction is considered "constant" in this case, while the effect of the main predictors is rather "conditional": $y = (\beta_i + \beta_{ij} X_j) X_i + ...$. [The model should also retain its form under scale transformations](http://www.talkstats.com/threads/doing-correct-backwards-elimination-with-interaction-terms.59314/) $X_i + c$.
+```{r}
+# Create a wrapper function to consider only subsets, that obey hierarchy rules for selection
+obey_hierarchy <- function(x, x_subset) {
+  pred <- x[! x %in% x_subset]
+  return( ! pred %in% unlist(strsplit(x_subset, ":")) )
+}
+get_subsets_hierarchical <- function(x) {
+  X <- get_subsets(x)
+  return( X[ , apply(X, 2, obey_hierarchy, x = x), drop = FALSE] )
+}
+```
+
+The results for each step $k$ do not depend on the choice of measure, since various model selection criteria (such as $R^2_{adj}$, $C_p$, BIC, or AIC, that are all modifications of RSS) differ only in how models of *different* sizes are compared. The intuition behind the *adjusted $R^2$* is that once all of the correct predictors have been included in the model, adding additional noise variables does not lead to additional gain in accuracy of model's predictions. Unlike the regular $R^2$ statistic, $R^2_{adj}$ puts a penalty for the inclusion of unnecessary variables in the model. (We also remove found linear dependencies, created by interactions between `votes_boost` and certain factor levels.)
+
+```{r}
+# Start with the full model, containing all ("nominal") predictors
+all_predictors <- all_predictors[! grepl("votes_boost:(title_type|genre|mpaa_rating)", all_predictors)]
+# Iterate over different size models, keeping the score of the found best one and predictors as dummies
+p_nom <- length(all_predictors)
+X_nom <- matrix(NA, nrow = p_nom, ncol = p_nom + 1)
+colnames(X_nom) <- c("adjr2", all_predictors)
+X <- as.matrix(all_predictors, ncol = 1)
+for (size in seq(from = p_nom, to = 1, by = -1)) {
+  best_model <- get_best(X, y = "imdb_norm", data = design)
+  best_subset <- all_predictors %in% best_model$variables
+  X_nom[size, ] <- c(best_model$score, as.numeric(best_subset))
+  X <- get_subsets_hierarchical(best_model$variables)
+}
+# Print a quick glimpse of an output table
+knitr::kable(as.data.frame(X_nom)) %>%
+  kableExtra::kable_styling("striped") %>% kableExtra::scroll_box(height = "400px", width = "100%")
+```
+
+We can visually compare the accuracy of models of different size, by drawing the curve for calculated $R^2_{adj}$ score. 
+
+```{r}
+# Create re-usable helper function for basic curve
+plot_score <- function(vec) {
+  ggplot(
+    data = data.frame(k = 1:length(vec), score = vec),
+    aes(x = k, y = score)
+  ) +
+    geom_line(col = "deepskyblue", size = 1) +
+    geom_point(col = "deepskyblue", size = 3) + 
+    labs(
+      x = "Number of Variables", 
+      title = "Backwards Stepwise Model Selection"
+    )
+}
+# Customize plot for a given vector of values
+v  <- X_nom[, "adjr2"]
+points <- c(pars = 6, nom = 13, max = which.max(v))
+plot_score(vec = v) +
+  geom_point(
+    data = data.frame(idx = points, value = v[points]) -> v_points,
+    aes(x = idx, y = value),
+    size = 5, stroke = 1, shape = 1, col = "red"
+  ) + 
+  geom_label(
+    data = v_points,
+    aes(x = idx, y = value, label = format(value, digits = 3)),
+    nudge_y = 0.02, nudge_x = - 1, alpha = 0.5
+  ) +
+  ylab(expression(R[adj]^2))
+```
+
+The best model in terms of accuracy contains 45 predictors ("nominal" degrees of freedom), and therefore very hard to interpret. Since its score differs very slightly from the plateau value, it is also hard to justify why should one prefer this particular model over the others that are almost as good. On the other hand, the blue curve also demonstrates a pronounced "elbow", after which each additional value leads to little or no improvement in predictive power. Consider first the "parsimonious" model of size 6:
+```{r}
+# Get the corresponding predictors
+subset_pars <- X_nom[points[["pars"]], ]
+( predictors_pars <- names(subset_pars)[subset_pars == 1]  ) 
+```
+This economic model makes the most use of its few variables, before any interactions turn in. It therefore allows us to answer the question "which features are most useful for prediction". We prefer a compromise and get some boost in accuracy, by considering another "elbow" model in the range [7, 17], for instance, the relative peak at number of predictors 13:
+
+```{r}
+# Get the corresponding predictors
+subset_nom <- X_nom[points[["nom"]], ]
+( predictors_nom <- names(subset_nom)[subset_nom == 1]  ) 
+```
+
+Refit the latter "nominal" model for further examination and prediction:
+```{r}
+rhs_nom <- paste(predictors_nom, collapse = " + ")
+model_nom <- lm(paste("imdb_norm ~ ", rhs_nom), data = design)
+summary(model_nom)
+```
+Some of predictor coefficients are not statistically significant. However, this is expected, since we selected among "nominal" variables, not distinguishing between individual factor levels.
+
+
+### 2nd Strategy: Expand Factor Levels ("Effective")
+
+Each factor with $l$ levels, encoded as indicator variable, contributes $l-1$ degrees of freedom (1 level is kept as reference). In the second approach, one treats those "effective" variables as separate predictors.
+
+```{r}
+full_model_matrix <- expand_factors[ , -full_model_lindeps[-1]]
+full_model_data <- as.data.frame(full_model_matrix)[ , -1]
+full_model_fit <- lm("imdb_norm ~ .", full_model_data)
+```
+
+```{r, class.source = 'fold-show'}
+# Effective number of parameters, excluding intercept
+( p_eff <- full_model_fit$rank - 1 )
+```
+
+In this case, we can automate the process of model selection, using `regsubsets()` from the `leaps` library, which has a similar syntax to `lm()`. It is laborious to print out the full summary, which returns separate best models of all sizes up to `nvmax` in the output (similar to our constructed earlier `X_nom` matrix). Lets concentrate instead on the $R^2_{adj}$ score.
+
+```{r, message = FALSE}
+X_eff <- regsubsets(
+  formula(full_model_fit), full_model_data, nvmax = p_eff, method = "backward"
+)
+w <- summary(X_eff)$adjr2
+points <- c(eff = 16, max = which.max(w))
+plot_score(vec = w) +
+  geom_point(
+    data = data.frame(idx = points, value = w[points]) -> w_points,
+    aes(x = idx, y = value),
+    size = 5, stroke = 1, shape = 1, col = "red"
+  ) + 
+  geom_label(
+    data = w_points,
+    aes(x = idx, y = value, label = format(value, digits = 3)),
+    nudge_y = 0.03, nudge_x = -3, alpha = 0.5
+  ) +
+  ylab(expression(R[adj]^2))
+```
+
+We can also display the selected variables for the best model with a given number of predictors, using built-in `plot()` command of `regsubsets` object. Models are ranked vertically according to the chosen measure, and contributions of different variables are represented with black rectangles. (I have silently modified the definition of `plot.regsubsets()` to be able to change label settings for a slightly more readable output.)
+
+```{r plot.regsubsets, echo = FALSE}
+plot.regsubsets <- 
+function (x, labels = obj$xnames, main = NULL, scale = c("bic", 
+    "Cp", "adjr2", "r2"), col = gray(seq(0, 0.9, length = 10)), 
+    ...) 
+{
+    obj <- x
+    lsum <- summary(obj)
+    par(mar = c(7, 5, 6, 3) + 0.1)
+    nmodels <- length(lsum$rsq)
+    np <- obj$np
+    propscale <- FALSE
+    sscale <- pmatch(scale[1], c("bic", "Cp", "adjr2", "r2"), 
+        nomatch = 0)
+    if (sscale == 0) 
+        stop(paste("Unrecognised scale=", scale))
+    if (propscale) 
+        stop(paste("Proportional scaling only for probabilities"))
+    yscale <- switch(sscale, lsum$bic, lsum$cp, lsum$adjr2, lsum$rsq)
+    up <- switch(sscale, -1, -1, 1, 1)
+    index <- order(yscale * up)
+    colorscale <- switch(sscale, yscale, yscale, -log(pmax(yscale, 
+        1e-04)), -log(pmax(yscale, 1e-04)))
+    image(z = t(ifelse(lsum$which[index, ], colorscale[index], 
+        NA + max(colorscale) * 1.5)), xaxt = "n", yaxt = "n", 
+        x = (1:np), y = 1:nmodels, xlab = "", ylab = ..., #scale[1], 
+        col = col)
+    laspar <- par("las")
+    on.exit(par(las = laspar))
+    par(las = 2)
+    axis(1, at = 1:np, labels = labels, ...) # I modified this line
+    axis(2, at = 1:nmodels, labels = signif(yscale[index], 2))
+    if (!is.null(main)) 
+        title(main = main)
+    box()
+    invisible(NULL)
+}
+```
+
+```{r backwards-variables, out.width = "100%"}
+plot(
+  X_eff, 
+  scale = "adjr2", 
+  main = "Backwards Stepwise Selection: Predictors",
+  ylab = expression(R[adj]^2),
+  cex.axis = 0.4
+)
+```
+
+Compared to the first approach, the blue curve stabilizes at a slightly higher value, and it is harder to discern the particular "parsimonious" model using the "elbow" method. Consider, for instance, the "effective" model with 16 variables:
+```{r}
+k_eff <- points[["eff"]]
+predictors_eff <- names(coef(X_eff, k_eff))[-1]
+rhs_eff <- paste(predictors_eff, collapse = " + ")
+model_eff <- lm(paste("imdb_norm ~", rhs_eff), full_model_data)
+summary(model_eff)
+```
+
+
+Notice that, compared to the first "nominal" approach, all predictors turn out to be statistically significant with small p-values. For example, the negligibly small individual correlation of `thtr_rel_year` with response may become quite noticeable, if conditioned on other variables (e.g., such as `genre` or `dvd_lag`). Apart from treating factor levels differently, the second selection approach does not obey hierarchy and it is not clear how to interpret the resulting `model_eff`. Therefore, for stick to the previously found `model_nom` and inspect it further.
+
+
+### Model Interpretation and Diagnostics
+
+The selected model has the following form:
+$$\widehat{\texttt{imdb_norm}} = \beta_0 + \pmb{\beta}_1^T \pmb{I}_{\texttt{genre}}^{\scriptsize\text{ref: Documentary}} + \pmb{\beta}_5^T \pmb{I}_{\texttt{mpaa_rating}}^{\scriptsize\text{ref: G}} +\beta_6^\phantom{T} I_{\texttt{title_type}}^{\scriptsize\text{Feature or TV}} + \beta_{11}^\phantom{T} I_{\texttt{awards_pic}}^{\scriptsize\text{Yes}} + \beta_{12}^\phantom{T} I_{\texttt{dvd_lag}}^{\scriptsize\text{Yes}} +  \\
+(\beta_4^\phantom{T} + \pmb{\beta}_7^T \pmb{I}_{\texttt{genre}}^{\scriptsize\text{ref: Documentary}} ) \times \texttt{thtr_rel_year} + (\beta_9^\phantom{T} + \pmb{\beta}_{10}^T \pmb{I}_{\texttt{genre}}^{\scriptsize\text{ref: Documentary}} ) \times \texttt{quickness} + \\ 
+(\beta_3^\phantom{T} + \pmb{\beta}_8^T \pmb{I}_{\texttt{genre}}^{\scriptsize\text{ref: Documentary}} + \beta_{13}^\phantom{T} I_{\texttt{dvd_lag}}^{\scriptsize\text{Yes}}) \times \texttt{log_votes} + \beta_2^\phantom{T} \times (\texttt{log_votes} - 11.33)_+ $$
+
+Here the notation like $I_{\texttt{title_type}}^{\scriptsize\text{Feature or TV}}$ denotes indicator variable, taking the value 1 for specified level of a binary predictor. The bold font denotes the vector of such indicator variables, with respect to specified reference level. The interpretation of the first line, thus, is that it gives average IMDB score `imdb_norm`, whose value w.r.t. baseline $\beta_0$ changes for each category by the corresponding coefficients $\beta_i$, provided below:
+```{r}
+knitr::kable(model_nom$coefficients) %>% 
+  kableExtra::kable_styling("striped") %>% kableExtra::scroll_box(height = "400px")
+```
+
+Recall that the predicted score is related to the original IMDB rating [1,10] as follows:
+$$\texttt{imdb_rating} = 10 * \left( 1 - \frac{10^\texttt{imdb_norm}}{10} \right)$$
+Thus, `imdb_norm` can be interpreted as an exponent, giving the "fractional relative decrease" of the movie rating with respect to the maximum available value of 10. Given that $\log xy = \log x + \log y$, for an additional increase in numeric predictor $X_j$ by 1 unit, all else being equal, the decrease in the movie rating (w.r.t. 10) is multiplied by $10^{\beta_j}$. The corresponding coefficient $\beta_j$ is modified according to the levels of categorical predictors, as given by the above formula. 
+
+In case of the 3rd line, the 1 unit increase in `log_votes = log10(imdb_num_votes)` actually corresponds to 10 times increase in `imdb_num_votes`, resulting in the *elastic* multiplicative change $10^{\beta}$ of `imdb_rating`, all else being fixed. The final truncated term $(\texttt{log_votes}-11.3)_+ = I_{\texttt{imdb_num_votes}> 10^{11.3}}^{\scriptsize\text{Yes}} \times \log_{10}(\texttt{imdb_num_votes}/10^{11.3})$ is effectively changes both the average value (intercept) and coefficient of change (slope) for very large number of votes.
+
+
+The application of multiple linear regression methods generally depend on the set of conditions, that we can verify, using following [diagnositic plots](https://www.qualtrics.com/support/stats-iq/analyses/regression-guides/interpreting-residual-plots-improve-regression/): 
+
+```{r model-diagnostics, fig.asp = 1, message = FALSE}
+model <- model_nom
+resid_hist <- ggplot(model, aes(x = .resid)) +
+  geom_histogram(aes(y = ..density..), binwidth = 0.05, col = "white", alpha = 0.3) +
+  geom_density(aes(col = "Data"), size = 1, fill = "mediumseagreen", alpha = 0.15) + 
+  stat_function(
+    aes(col = "Normal"), size = 1,
+    fun = dnorm, args = list(mean = mean(model$residuals), sd = sd(model$residuals))
+  ) +
+  scale_color_manual(NULL, values = c("seagreen", "red")) + 
+  annotate(
+    "text", x = -0.2, y = 4.2,
+    label = paste("Kurtosis:", round(kurtosis(model$residuals), digits = 3))
+  ) +
+  theme(legend.position = c(0.15, 0.9)) +
+  labs(title = "Histogram", x = "Residuals", y = "Probability Density")
+resid_qqnorm <- ggplot(model, aes(sample = .resid)) + 
+  stat_qq(size = 2, shape = 21) + stat_qq_line() +
+  labs(title = "Normal Q-Q Plot for Residuals", x = "Theoretical Quantiles", y = "Sample Quantiles")
+resid_fitted <- ggplot(model, aes(x = .fitted, y = abs(.resid))) +
+  geom_jitter(shape = 16, size = 2, alpha = 0.5) +
+  geom_smooth(formula = y ~ x, method = "loess") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(title = "Residuals vs. Fitted", x = "Fitted Values", y = "Absolute Values of Residuals")
+resid_order <- ggplot(model, aes(x = 1:length(.resid), y = .resid)) +
+  geom_point(shape = 21, size = 2) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(title = "Residual Independence", x = "Order of Collection", y = "Residuals")
+grid.arrange(resid_hist, resid_qqnorm, resid_fitted, resid_order, ncol = 2, nrow = 2)
+```
+
+1. The *residuals are nearly normal* around 0. They are slightly over-dispersed with thick tails (positive excess kurtosys, flipped S-shape on QQ-plot), but deviations from normality are negligibly small (especially for large data sets).
+2. The *variability of the residuals is approximately constant* (homoscedasticity), without obvious trend, as can be seen from the absolute values of residuals, plotted against fitted values of IMDB score. The slightly higher variance at the relatively high values of `imdb_norm` (corresponding to larger `imdb_rating`) is mainly due to several outlying predictions. We will return to this issue shortly.
+3. The apparent randomness of residuals w.r.t. order of collection implies that they are *independent*, coming from a random sample.
+4. Each variable should be *linearly related* to the outcome. We already verified linearity assumption, when discussed `imdb_norm vs. log_votes` scatterplot and features design. To check linear relationship with other numeric predictors, we plot residuals against each of them.
+
+```{r, fig.asp = 0.8, message = FALSE}
+resid_quickness <- ggplot(broom::augment(model), aes(x = design$quickness, y = .resid)) + 
+  geom_point(shape = 16, size = 2, alpha = 0.5) + 
+  geom_smooth(formula = y ~ x, method = "loess") +
+  labs(x = "Quickness = 1 / Runtime", y = NULL)
+resid_year <- ggplot(broom::augment(model), aes(x = design$thtr_rel_year, y = .resid)) + 
+  geom_point(shape = 16, size = 2, alpha = 0.5) + 
+  geom_smooth(formula = y ~ x, method = "loess") +
+  labs(x = "Year of Release in Theater", y = NULL)
+resid_month <- ggplot(broom::augment(model), aes(x = design$thtr_rel_month, y = .resid)) + 
+  geom_point(shape = 16, size = 2, alpha = 0.5) + 
+  geom_smooth(formula = y ~ x, method = "loess") +
+  labs(x = "Month of Release in Theater", y = NULL)
+resid_day <- ggplot(broom::augment(model), aes(x = design$thtr_rel_day, y = .resid)) + 
+  geom_point(shape = 16, size = 2, alpha = 0.5) + 
+  geom_smooth(formula = y ~ x, method = "loess") +
+  labs(x = "Day of Release in Theater", y = NULL)
+grid.arrange(
+  resid_quickness, resid_year, resid_month, resid_day, ncol = 2,
+  top = grid::textGrob(
+    "Linearity Assumption: Residuals vs. Predictors", gp = grid::gpar(fontsize = 14, fontface = "bold")
+  )
+)
+```
+Finally, in order to visually assess the accuracy of predictions, we plot the actual IMDB scores against fitted values (with diagonal and local regression lines on top, to see any patterns).
+
+```{r, message = FALSE}
+imdb_predicted <- ggplot(broom::augment(model), aes(x = .fitted, y = imdb_norm)) + 
+  geom_point(aes(color = imdb_norm - .fitted < 0.17 | imdb_norm < 0.5), shape = 16, size = 2, alpha = 0.7) + 
+  geom_abline(slope = 1, intercept = 0, size = 1, linetype = "dashed") +
+  geom_smooth(formula = y ~ x, method = "loess") +
+  theme(legend.position = "top") + 
+  labs(x = "Fitted Values", y = "IMDB Score", title = "Actual Values vs. Predicted")
+imdb_predicted
+```
+
+We clearly see linear trend, with the normal scatter spreading at distance 0.2 about the null. The color denotes outlying observations with largest residuals in the lower region of `imdb_rating` (see discussion in Conclusion).
+
+
+* * *
+
+## Part 5: Prediction
+
+The good practice is to split data into "training" and "test" subsets, and to use the second one for validation of the accuracy of predictions on the data, not used for the model fitting. Instead, we used adjusted $R^2$ measure as a means to compensate possible over-fitting (another way is cross-validation). Lets check how our model performs on some out-of-sample observations. We pick a movie from 2016 (and a handful of others not in the original dataset), with information gathered from [Rotten Tomatoes](https://www.rottentomatoes.com/) and [IMDB](https://www.imdb.com/):
+
+```{r new-data, echo = FALSE}
+new_data <- tibble(
+  title           = c("The Conjuring 2", "Pleasantville", "Forrest Gump", "Ferris Bueller's Day Off", 
+                      "Crank", "Prince of Darkness", "Religulous", "Metal: A Headbanger's Journey",
+                      "Catwoman"),
+  title_type      = c("Feature or TV", "Feature or TV", "Feature or TV", "Feature or TV", 
+                      "Feature or TV", "Feature or TV", "Documentary", "Documentary", "Feature or TV"),
+  genre           = c("Horror", "Comedy", "Drama", "Comedy", 
+                      "Action & Adventure", "Horror", "Documentary", "Documentary",
+                      "Action & Adventure"),
+  runtime         = c(134, 124, 142, 103, 83, 102, 101, 96, 104),
+  mpaa_rating     = c("R or NC-17", "PG-13", "PG-13", "PG-13", 
+                      "R or NC-17", "R or NC-17", "R or NC-17", "R or NC-17",
+                      "PG-13"),
+  thtr_rel_year   = c(2016, 1998, 1994, 1986, 2006, 1987, 2008, 2005, 2004),
+  dvd_lag         = c("No", "No", "Yes", "Yes", "No", "Yes", "No", "No", "No"),
+  imdb_rating     = c(7.3, 7.5, 8.8, 7.8, 6.9, 6.7, 7.6, 8.1, 3.4),
+  imdb_num_votes  = c(247809, 124997, 1904201, 335380, 241402, 40033, 58537, 11950, 114846),
+  critics_rating  = c("Certified Fresh", "Certified Fresh", "Fresh", "Certified Fresh", 
+                      "Fresh", "Rotten", "Fresh", "Fresh", "Rotten"),
+  critics_score   = c(80, 85, 71, 80, 61, 58, 69, 90, 9),
+  audience_rating = c("Upright", "Upright", "Upright", "Upright", "Upright", "Upright", "Upright", "Upright",
+                      "Spilled"),
+  audience_score  = c(81, 79, 95, 92, 71, 60, 78, 91, 18),
+  awards_pic      = c("No", "Yes", "Yes", "No", "No", "No", "No", "No", "No"),
+  top200_box      = c("no", "no", "yes", "no", "no", "no", "no", "no", "no"),
+  imdb_url        = c("https://www.imdb.com/title/tt3065204/?ref_=nv_sr_srsg_0",    
+                      "https://www.imdb.com/title/tt0120789/?ref_=ttspec_ql", 
+                      "https://www.imdb.com/title/tt0109830/?ref_=nv_sr_srsg_0",
+                      "https://www.imdb.com/title/tt0091042/?ref_=nv_sr_srsg_0",
+                      "https://www.imdb.com/title/tt0479884/?ref_=nv_sr_srsg_0",
+                      "https://www.imdb.com/title/tt0093777/?ref_=nv_sr_srsg_0",
+                      "https://www.imdb.com/title/tt0815241/?ref_=nv_sr_srsg_0",
+                      "https://www.imdb.com/title/tt0478209/?ref_=nv_sr_srsg_0",
+                      "https://www.imdb.com/title/tt0327554/?ref_=adv_li_tt"),
+  rt_url          = c("https://www.rottentomatoes.com/m/the_conjuring_2", 
+                      "https://www.rottentomatoes.com/m/pleasantville",
+                      "https://www.rottentomatoes.com/m/forrest_gump",
+                      "https://www.rottentomatoes.com/m/ferris_buellers_day_off",
+                      "https://www.rottentomatoes.com/m/crank",
+                      "https://www.rottentomatoes.com/m/prince_of_darkness",
+                      "https://www.rottentomatoes.com/m/religulous",
+                      "https://www.rottentomatoes.com/m/metal_a_headbangers_journey",
+                      "https://www.rottentomatoes.com/m/catwoman")
+) %>% mutate(
+  imdb_norm = transform_response(imdb_rating),
+  log_votes = log(imdb_num_votes),
+  quickness   = 1 / runtime,
+  votes_boost = (log_votes - 11.33) * ifelse(log_votes > 11.33, 1, 0)
+)
+```
+
+```{r new-data-print}
+knitr::kable(new_data) %>%
+  kableExtra::kable_styling("striped") %>% kableExtra::scroll_box(width = "100%")
+```
+
+Using developed model, perform a prediction of `imdb_norm` and then back-transform it to original scale, for ease of interpretation.
+
+```{r}
+predictions <- as.data.frame(
+  predict( model_nom, newdata = new_data, interval = "prediction" )
+) %>% transmute( 
+  imdb_fit = get_imdb(fit), imdb_lwr = get_imdb(upr), imdb_upr = get_imdb(lwr)
+) %>% round(1)
+new_data %>% select(title, imdb_rating) %>% 
+  cbind( predictions) %>% mutate(
+    `lwr < actual < upr` = imdb_lwr < imdb_rating & imdb_rating < imdb_upr
+  ) %>% knitr::kable() %>%
+  kableExtra::kable_styling("striped") 
+```
+
+Although new data is not randomly sampled, I tried different movies in terms of score, genre, time period, etc. The last columns display lower and upper boundaries of prediction interval, as well whether it managed to capture the actual IMDB score in each case. 
+
+In general, the accuracy of $\hat{Y}$ as a prediction for $Y=f(X)+\epsilon$ depends on some *reducible* error (associated to imperfect estimate $\hat{f}$), as well as *irreducible* random error $\epsilon$, that does not depend on $X$. The first type of uncertainty, surrounding average values over a large number of movies in our case (e.g., variability of coefficient estimates $\hat{\beta}$ in linear regression), can be quantified by *confidence interval*. For a given confidence level $\alpha = 0.95$, 95% of similarly constructed intervals for a large number of data samples will contain the true value of $f(X)$.
+
+On the other hand, a *prediction interval* can be used to quantify how much an individual point will differ from the population regression plane, that is, the uncertainty surrounding IMDB score for a *particular* movie in our case. We interpret this to mean that 95 % of intervals of this form will contain the true value of `imdb_rating` for a given city. The prediction interval is always wider.
+
+It seems our model performs not so bad, but there is a plenty room for improvement (especially, for some ["notoriously bad" movies](https://www.imdb.com/search/title/?groups=bottom_250&view=simple&sort=user_rating,asc&ref_=adv_prv)).
+
+* * *
+
+## Part 6: Conclusion
+
+In this project, I have attempted to find a reasonably "small" model, which is good at explaining the relationship between movies attributes and its rating on IMDB, that also have small errors and, thus, is good for predicting the latter. Moreover, I have chosen not to use another ratings/scores on Rotten Tomatoes as potential predictors (since they, essentially, represent the same information as response). Using backward feature elimination strategy and $R_{adj}^2$ as model selection criterion, I have ranked predictors by their impact on prediction accuracy. The most important attributes turned out to be `genre`, `log_votes`,  `thtr_rel_year`, `mpaa_rating`, `title_type`, followed by interactions `thtr_rel_year:genre`, `log_votes:genre`, `quickness`, `quickness:genre`, `awards_pic`, `dvd_lag` and `dvd_lag:log_votes`. The latter categorical predictors specify, if the movie was nominated or won an Oscar, as well as whether its release on dvd appeared shortly, or it was in fact "re-released" from the past (e.g., when the technology became available).
+
+Note that the resulting model is effectively non-linear, fitting log-transformed response and `imdb_num_votes` as well as inverse `1/runtime = quickness`. I implemented the model search strategy, that only eliminates categorical predictors as a whole (not individual factor levels) and also respects the hierarchy rules (i.e., not to eliminate predictors, if their interactions are still in the model). The resulting economic model explains about 62% of variation in response ($R^2=0.619$, and penalized $R_{adj}^2=0.586$). This is contrasted with the automated search using `leaps` package, that does not satisfy the above conditions, and leads to less tractable results, with only small boost in accuracy.
+
+The selected model somewhat underperforms in the region of really low scores. Lets look closer at the movies, that constitute most problematic observations for our model, highlighted in red on the "Actual vs. Predicted" plot above:
+```{r}
+pred <- predict(model_nom, design)
+filter(movies, runtime > 60)[design$imdb_norm - pred > 0.17 & design$imdb_norm > 0.5, ] %>% 
+  select(-c(runtime, studio, thtr_rel_month:dvd_rel_day, best_pic_nom:actor5)) %>% 
+  knitr::kable() %>% 
+  kableExtra::kable_styling("striped") %>% kableExtra::scroll_box(width = "100%", height = "400px")
+```
+
+By inspecting metadata, we can observe the commonality that all of the movies have "Rotten" critics rating. Had we included discrete `critics_rating` and/or `audience_rating` as predictors, this would reduce the spread (improving $R_{adj}^2$ by about 0.1-0.15), but does not get rid of the largest residuals completely. Instead, we may also notice on the corresponding webpages of examples from the above, that they are universally recognized as *worst movies* - the large majority of them received various parody awards like "Razzie", "The Stinkers Bad Movie Awards", or "Golden Schmoes Awards". In analogy to already existing `best_pic_nom`, `best_pic_win` in the original sample, it could be interesting to collect also such data about "worst_pic" awards, and use it for prediction.
+
