@@ -2,7 +2,12 @@
 title: "EDA: 3 Questions to BRFSS Data"
 subtitle: "\"Introduction to Probability and Data with R\" Project"
 author: "Vadim Belov"
-output: 
+output:
+  github_document:
+    pandoc_args: --webtex
+    toc: true
+    toc_depth: 3
+    fig_height: 4
   html_document: 
     toc: true
     toc_depth: 3
@@ -13,9 +18,16 @@ output:
 
 ## Setup
 
+```{r github-paths, echo = FALSE}
+# Set URL to render the "github-friendly" markdown output for remote placement in main
+knitr::opts_knit$set(base.url = "https://github.com/belovvadim/openintrostat-dataprojects/blob/main/project-files/")
+# Do not forget to push auxiliary files
+```
+
+
 ### Task
 
-Describe data, collection method and the scope of inference. Come up with at least 3 research questions and perform simple explanatory data analysis (EDA) on each of them, containing numerical summaries and visualizations (cf. [project requirements](requirements/info1_intro_data_prob.md)).
+Describe data, collection method and the scope of inference. Come up with at least 3 research questions and perform simple exploratory data analysis (EDA) on each of them, containing numerical summaries and visualizations (cf. [project requirements](https://github.com/belovvadim/openintrostat-dataprojects/blob/main/requirements/info1_intro_data_prob.md)).
 
 ### Load packages
 

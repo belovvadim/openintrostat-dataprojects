@@ -10,11 +10,17 @@ output:
     fig_height: 4
     highlight: pygments
     theme: spacelab
+  github_document:
+    pandoc_args: --webtex
+    toc: true
+    toc_depth: 3
+    fig_height: 4
+always_allow_html: true
 ---
 
 ## Setup
 
-The code chunks are hidden by default, for easier reading. You can freely unfold them at will, by clicking on "code" tab.
+Some code chunks are hidden by default (in the HTML version), for easier reading. You can freely unfold them at will, by clicking on the "code" tab.
 
 ```{css, echo=FALSE}
 pre {
@@ -24,6 +30,10 @@ pre {
 ```
 
 ```{r setup, echo = FALSE}
+# Set URL to render the "github-friendly" markdown output for remote placement in main
+knitr::opts_knit$set(base.url = "https://github.com/belovvadim/openintrostat-dataprojects/blob/main/project-files/")
+# Do not forget to push auxiliary files
+
 knitr::opts_chunk$set(
   fig.width = 11,
   fig.asp = 0.618,
@@ -34,13 +44,11 @@ knitr::opts_chunk$set(
 ggplot2::theme_update(
   plot.title = ggplot2::element_text(hjust = 0.5, face = "bold")
 )
-#library(printr)     # nicer tabular output
-#options(knitr.table.NA = "")
 ```
 
 ### Task
 
-Describe movies dataset and perform EDA. Develop a multiple linear regression model to predict a numerical variable, that describes movie's popularity. Do a prediction for previously unseen data (cf. [project requirements](requirements/info3_reg_model.md)).
+Describe movies dataset and perform EDA. Develop a multiple linear regression model to predict a numerical variable, that describes movie's popularity. Do a prediction for previously unseen data (cf. [project requirements](https://github.com/belovvadim/openintrostat-dataprojects/blob/main/requirements/info3_reg_model.md)).
 
 ### Load packages
 
@@ -53,6 +61,8 @@ library(tidyr)      # data cleaning and representation change
 library(forcats)    # modify factor levels
 library(e1071)      # compute central moments (skewness and kurtosis)
 library(leaps)      # model selection tools
+library(knitr)      # report generation
+library(kableExtra) # customized tables
 ```
 
 ### Load data
@@ -157,8 +167,8 @@ ggplot(data.frame(x = c(-1, 1)), aes(x = x)) +
   labs(title = "Transformation of Response Variable", x = "New Scale", y = "IMDB Scale")
 ```
 
-We can derive the original IMDB rating from the predicted `imdb_norm` score, using the inverse formula:
-$$\texttt{imdb_rating} = 10 - 10^\texttt{imdb_norm}$$
+We can derive the original IMDB rating from the predicted `imdb_norm` score, using the inverse formula:  
+$$\mathtt{imdb\_rating} = 10 - 10^\mathtt{imdb\_norm}$$
 
 Given possible values of the IMDB rating $[1,10]$, the new score varies in the range $(-\infty, 1]$ (unbounded from below). One could have adjusted it to lie between 0 and 1, at the expense of slightly less intuitive expression and data being less "normal-like". There is little gain though, since theoretically best rating of 10 (corresponding to arbitrarily small `imdb_norm`) is practically unattainable anyway. Indeed, the № 1 movie on the [list](https://www.imdb.com/search/title/?groups=top_100&sort=user_rating,desc&view=simple) is rated 9.3, which corresponds to `imdb_norm = -0.155`.
 
@@ -220,13 +230,12 @@ glimpse(design)
 
 Lets take care of missing values that we may have in our data.
 ```{r}
-knitr::kable(design[!complete.cases(design), colSums(is.na(design)) > 0])
+kable(design[!complete.cases(design), colSums(is.na(design)) > 0]) %>% kable_styling("striped")
 ```
 
 There can be no movie without runtime:
 ```{r}
-filter(movies, is.na(runtime)) %>% knitr::kable() %>% 
-  kableExtra::kable_styling("striped") %>% kableExtra::scroll_box(width = "100%")
+filter(movies, is.na(runtime)) %>% kable() %>% kable_styling("striped") %>% scroll_box(width = "100%")
 ```
 In fact, we can manually correct this erroneous data entry
 ```{r}
@@ -260,9 +269,9 @@ movies %>%
   filter( ! between(runtime, 60, 210) ) %>% 
   select(title, title_type, runtime, imdb_num_votes, imdb_rating, audience_score, critics_score) %>% 
   arrange(imdb_rating) %>% 
-  knitr::kable() %>% kableExtra::kable_styling("striped")
+  kable() %>% kable_styling("striped")
 ```
-\
+
 I choose to remove 2 very short documentaries as clear outliers and do not consider titles shorter than, say, 60 min. (The 3rd long one turns out to be not so far off on the transformed distribution.) After passing to the inverse of a runtime, that we call `quickness = 1 / runtime`, the data appears more symmetric. 
 
 ```{r runtime-transformation, fig.asp = 1, message = FALSE}
@@ -371,7 +380,7 @@ design %>%
 We can see that whether or not one of the main actors/actresses in the movie ever won an Oscar has very little or no relevance for the movie score on its own. Since these variables are similar in nature, we can lump them together for simplicity into `awards_team`. On the other hand, the nomination or winning the best picture Oscar appear to be quite reliable predictors (although sample is imbalanced), but they overlap almost fully, with only one misclassification ("won, but no nomination"): 
 ```{r weird}
 filter(movies, best_pic_win == "yes" & best_pic_nom == "no") %>%
-  knitr::kable() %>% kableExtra::kable_styling("striped") %>% kableExtra::scroll_box(width = "100%")
+  kable() %>% kable_styling("striped") %>% scroll_box(width = "100%")
 ```
 
 Note that some categories contain very few data points, such as rating NC-17 (plus "TV Movie" title type has huge variance of scores, as result), so we can merge some factor levels together:
@@ -563,8 +572,7 @@ for (size in seq(from = p_nom, to = 1, by = -1)) {
   X <- get_subsets_hierarchical(best_model$variables)
 }
 # Print a quick glimpse of an output table
-knitr::kable(as.data.frame(X_nom)) %>%
-  kableExtra::kable_styling("striped") %>% kableExtra::scroll_box(height = "400px", width = "100%")
+kable(as.data.frame(X_nom)) %>% kable_styling("striped") %>% scroll_box(height = "400px", width = "100%")
 ```
 
 We can visually compare the accuracy of models of different size, by drawing the curve for calculated $R^2_{adj}$ score. 
@@ -727,21 +735,20 @@ Notice that, compared to the first "nominal" approach, all predictors turn out t
 ### Model Interpretation and Diagnostics
 
 The selected model has the following form:
-$$\widehat{\texttt{imdb_norm}} = \beta_0 + \pmb{\beta}_1^T \pmb{I}_{\texttt{genre}}^{\scriptsize\text{ref: Documentary}} + \pmb{\beta}_5^T \pmb{I}_{\texttt{mpaa_rating}}^{\scriptsize\text{ref: G}} +\beta_6^\phantom{T} I_{\texttt{title_type}}^{\scriptsize\text{Feature or TV}} + \beta_{11}^\phantom{T} I_{\texttt{awards_pic}}^{\scriptsize\text{Yes}} + \beta_{12}^\phantom{T} I_{\texttt{dvd_lag}}^{\scriptsize\text{Yes}} +  \\
-(\beta_4^\phantom{T} + \pmb{\beta}_7^T \pmb{I}_{\texttt{genre}}^{\scriptsize\text{ref: Documentary}} ) \times \texttt{thtr_rel_year} + (\beta_9^\phantom{T} + \pmb{\beta}_{10}^T \pmb{I}_{\texttt{genre}}^{\scriptsize\text{ref: Documentary}} ) \times \texttt{quickness} + \\ 
-(\beta_3^\phantom{T} + \pmb{\beta}_8^T \pmb{I}_{\texttt{genre}}^{\scriptsize\text{ref: Documentary}} + \beta_{13}^\phantom{T} I_{\texttt{dvd_lag}}^{\scriptsize\text{Yes}}) \times \texttt{log_votes} + \beta_2^\phantom{T} \times (\texttt{log_votes} - 11.33)_+ $$
+$$\widehat{\mathtt{imdb\_norm}} = \beta_0 + \pmb{\beta}_1^T \pmb{I}_{\mathtt{genre}}^{\scriptsize\text{ref: Documentary}} + \pmb{\beta}_5^T \pmb{I}_{\mathtt{mpaa\_rating}}^{\scriptsize\text{ref: G}} +\beta_6^{} I_{\mathtt{title\_type}}^{\scriptsize\text{Feature or TV}} + \beta_{11}^{} I_{\mathtt{awards\_pic}}^{\scriptsize\text{Yes}} + \beta_{12}^{} I_{\mathtt{dvd\_lag}}^{\scriptsize\text{Yes}} +  \\
+(\beta_4^{} + \pmb{\beta}_7^T \pmb{I}_{\mathtt{genre}}^{\scriptsize\text{ref: Documentary}} ) \times \mathtt{thtr\_rel\_year} + (\beta_9^{} + \pmb{\beta}_{10}^T \pmb{I}_{\mathtt{genre}}^{\scriptsize\text{ref: Documentary}} ) \times \mathtt{quickness} + \\ 
+(\beta_3^{} + \pmb{\beta}_8^T \pmb{I}_{\mathtt{genre}}^{\scriptsize\text{ref: Documentary}} + \beta_{13}^{} I_{\mathtt{dvd\_lag}}^{\scriptsize\text{Yes}}) \times \mathtt{log\_votes} + \beta_2^{} \times (\mathtt{log\_votes} - 11.33)_+ $$
 
-Here the notation like $I_{\texttt{title_type}}^{\scriptsize\text{Feature or TV}}$ denotes indicator variable, taking the value 1 for specified level of a binary predictor. The bold font denotes the vector of such indicator variables, with respect to specified reference level. The interpretation of the first line, thus, is that it gives average IMDB score `imdb_norm`, whose value w.r.t. baseline $\beta_0$ changes for each category by the corresponding coefficients $\beta_i$, provided below:
+Here the notation like $I_{\mathtt{title\_type}}^{\scriptsize\text{Feature or TV}}$ denotes indicator variable, taking the value 1 for specified level of a binary predictor. The bold font denotes the vector of such indicator variables, with respect to specified reference level. The interpretation of the first line, thus, is that it gives average IMDB score `imdb_norm`, whose value w.r.t. baseline $\beta_0$ changes for each category by the corresponding coefficients $\beta_i$, provided below:
 ```{r}
-knitr::kable(model_nom$coefficients) %>% 
-  kableExtra::kable_styling("striped") %>% kableExtra::scroll_box(height = "400px")
+kable(model_nom$coefficients) %>% kable_styling("striped") %>% scroll_box(height = "400px")
 ```
 
 Recall that the predicted score is related to the original IMDB rating [1,10] as follows:
-$$\texttt{imdb_rating} = 10 * \left( 1 - \frac{10^\texttt{imdb_norm}}{10} \right)$$
+$$\mathtt{imdb\_rating} = 10 * \left( 1 - \frac{10^\mathtt{imdb\_norm}}{10} \right)$$
 Thus, `imdb_norm` can be interpreted as an exponent, giving the "fractional relative decrease" of the movie rating with respect to the maximum available value of 10. Given that $\log xy = \log x + \log y$, for an additional increase in numeric predictor $X_j$ by 1 unit, all else being equal, the decrease in the movie rating (w.r.t. 10) is multiplied by $10^{\beta_j}$. The corresponding coefficient $\beta_j$ is modified according to the levels of categorical predictors, as given by the above formula. 
 
-In case of the 3rd line, the 1 unit increase in `log_votes = log10(imdb_num_votes)` actually corresponds to 10 times increase in `imdb_num_votes`, resulting in the *elastic* multiplicative change $10^{\beta}$ of `imdb_rating`, all else being fixed. The final truncated term $(\texttt{log_votes}-11.3)_+ = I_{\texttt{imdb_num_votes}> 10^{11.3}}^{\scriptsize\text{Yes}} \times \log_{10}(\texttt{imdb_num_votes}/10^{11.3})$ is effectively changes both the average value (intercept) and coefficient of change (slope) for very large number of votes.
+In case of the 3rd line, the 1 unit increase in `log_votes = log10(imdb_num_votes)` actually corresponds to 10 times increase in `imdb_num_votes`, resulting in the *elastic* multiplicative change $10^{\beta}$ of `imdb_rating`, all else being fixed. The final truncated term $(\mathtt{log\_votes}-11.3)_+ = I_{\mathtt{imdb\_num\_votes}> 10^{11.3}}^{\scriptsize\text{Yes}} \times \log_{10}(\mathtt{imdb\_num\_votes}/10^{11.3})$ is effectively changes both the average value (intercept) and coefficient of change (slope) for very large number of votes.
 
 
 The application of multiple linear regression methods generally depend on the set of conditions, that we can verify, using following [diagnositic plots](https://www.qualtrics.com/support/stats-iq/analyses/regression-guides/interpreting-residual-plots-improve-regression/): 
@@ -880,8 +887,7 @@ new_data <- tibble(
 ```
 
 ```{r new-data-print}
-knitr::kable(new_data) %>%
-  kableExtra::kable_styling("striped") %>% kableExtra::scroll_box(width = "100%")
+kable(new_data) %>% kable_styling("striped") %>% scroll_box(width = "100%")
 ```
 
 Using developed model, perform a prediction of `imdb_norm` and then back-transform it to original scale, for ease of interpretation.
@@ -895,8 +901,7 @@ predictions <- as.data.frame(
 new_data %>% select(title, imdb_rating) %>% 
   cbind( predictions) %>% mutate(
     `lwr < actual < upr` = imdb_lwr < imdb_rating & imdb_rating < imdb_upr
-  ) %>% knitr::kable() %>%
-  kableExtra::kable_styling("striped") 
+  ) %>% kable() %>% kable_styling("striped") 
 ```
 
 Although new data is not randomly sampled, I tried different movies in terms of score, genre, time period, etc. The last columns display lower and upper boundaries of prediction interval, as well whether it managed to capture the actual IMDB score in each case. 
@@ -920,8 +925,7 @@ The selected model somewhat underperforms in the region of really low scores. Le
 pred <- predict(model_nom, design)
 filter(movies, runtime > 60)[design$imdb_norm - pred > 0.17 & design$imdb_norm > 0.5, ] %>% 
   select(-c(runtime, studio, thtr_rel_month:dvd_rel_day, best_pic_nom:actor5)) %>% 
-  knitr::kable() %>% 
-  kableExtra::kable_styling("striped") %>% kableExtra::scroll_box(width = "100%", height = "400px")
+  kable(digits = 3) %>% kable_styling("striped") %>% scroll_box(width = "100%", height = "400px")
 ```
 
 By inspecting metadata, we can observe the commonality that all of the movies have "Rotten" critics rating. Had we included discrete `critics_rating` and/or `audience_rating` as predictors, this would reduce the spread (improving $R_{adj}^2$ by about 0.1-0.15), but does not get rid of the largest residuals completely. Instead, we may also notice on the corresponding webpages of examples from the above, that they are universally recognized as *worst movies* - the large majority of them received various parody awards like "Razzie", "The Stinkers Bad Movie Awards", or "Golden Schmoes Awards". In analogy to already existing `best_pic_nom`, `best_pic_win` in the original sample, it could be interesting to collect also such data about "worst_pic" awards, and use it for prediction.

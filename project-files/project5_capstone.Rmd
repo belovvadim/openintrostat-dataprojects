@@ -3,12 +3,18 @@ title: "Predicting House Prices in Ames, Iowa"
 subtitle: "\"Statistics with R\" Capstone Project"
 author: "Vadim Belov"
 output:
+  github_document:
+    pandoc_args: --webtex
+    toc: true
+    toc_depth: 3
+    fig_height: 4
   html_document: 
     code_folding: show
     toc: true
     toc_depth: 3
     highlight: pygments
     theme: spacelab
+always_allow_html: true
 ---
 
 ```{css, echo = FALSE}
@@ -25,6 +31,10 @@ pre[class] {
 # Setup
 
 ```{r setup, echo = FALSE}
+# Set URL to render the "github-friendly" markdown output for remote placement in main
+knitr::opts_knit$set(base.url = "https://github.com/belovvadim/openintrostat-dataprojects/blob/main/project-files/")
+# Do not forget to push auxiliary files
+
 knitr::opts_chunk$set(
   fig.width = 11,
   fig.asp = 0.618,
@@ -41,7 +51,7 @@ ggplot2::theme_update(
 
 As a statistical consultant working for a real estate investment firm, your task is to develop a model to predict the selling price of a given home in Ames, Iowa. Your employer hopes to use this information to help assess whether the asking price of a house is higher or lower than the true value of the house. If the home is undervalued, it may be a good investment for the firm.
 
-Go through all the stages of the realistic data analysis project, following step-by-step guidelines. Answer specific questions with appropriate methods to draw correct conclusions from the data. Complete the analysis by building the predictive linear model and evaluating in on out-of-sample observations. See the [project description](requirements/info5_capstone.md) for more details.
+Go through all the stages of the realistic data analysis project, following step-by-step guidelines. Answer specific questions with appropriate methods to draw correct conclusions from the data. Complete the analysis by building the predictive linear model and evaluating in on out-of-sample observations. See the [project description](https://github.com/belovvadim/openintrostat-dataprojects/blob/main/requirements/info5_capstone.md) for more details.
 
 
 ## Training Data and relevant packages
@@ -65,7 +75,7 @@ library(BAS)        # Bayesian Variable Selection and Model Averaging
 library(boot)       # Bootstrap Resampling
 library(TOSTER)     # equivalence testing
 library(knitr)      # report generation
-library(kableExtra) # cutomized tables
+library(kableExtra) # customized tables
 ```
 
 ```{r plot.bas, echo = FALSE}
@@ -288,7 +298,6 @@ image.bas <- function (x, top.models = 20, intensity = TRUE, prob = TRUE,
 }
 ```
 
-\
 NOTE: Some code chunks are hidden by default (e.g., for fancier plots), but you can easily unfold them, by clicking on the "code" tab.
 
 # Part 1 Exploratory Data Analysis (EDA)
@@ -342,7 +351,7 @@ d <- select(d0, -all_of(imbalanced))
 d0 %>% select(all_of(imbalanced)) %>% 
   mutate(across(where(is.numeric), function(x) as.factor(ifelse(x > 0, "> 0", "0")))) %>% summary()
 ```
-\
+
 In addition to the above, one can perform the ANOVA F-test for dependence to detect any significant difference in average price between individual predictor levels of categorical variables. (The assumption of nearly normal distribution is satisfied by log-transformation of the price.) As the sample size increases, the ("unexplained") within-group variability about the means will diminish but the ("explained") variation between group means will not, resulting in a higher $F = \frac{\mathrm{explained\ variance}}{\mathrm{unexplained\ variance}}$ (small p-values) and the rejection of the null hypothesis $H_0$: "no difference". Hence, for our rather large sample (n = 1000), the following relatively high p-values are in agreement with the assumed independence, justifying our decision to discard those variables as not being reliable predictors of average price.
 
 ```{r, class.source = "fold-hide"}
@@ -355,14 +364,14 @@ d0 %>% summarize(
   )
 ) %>% kable(digits = 3) %>% kable_styling("striped") %>% scroll_box(width = "100%")
 ```
-\
+  
 Lets now count the **missing values**:
 
 ```{r}
 na_counts <- colSums(is.na(d))
 sort(na_counts[na_counts > 0], decreasing = TRUE)
 ```
-\
+  
 With only one observation without any information about basement, and one with unknown garage details, plus 2 entries with missing either `Bsmt.Exposure` or `Garage.Finish`, I choose to omit these 4 incomplete data entries from our rather large dataset. The following example of a pairwise scatterplots helps us to justify dropping the variables, containing many NA's, by revealing their redundancy due to high correlation among predictors. (This strategy can be applied more generally to other variables as well.).
 
 ```{r, class.source = "fold-hide"}
@@ -441,7 +450,7 @@ adj.R2 <- sapply(
 )
 round(sort(adj.R2, decreasing = TRUE), 3)
 ```
-\
+  
 Additionally, we can take some hints about variable importance from the amount of variation in response, explained by each categorical predictor. Since some of the factors have multiple levels, one uses the adjusted $R^2$, which penalizes additional degrees of freedom.
 
 ### Numerical Variables
@@ -494,7 +503,7 @@ d %>% select_if(is.numeric) %>%
   labs(x = NULL, title = "Logarithm of Price vs. Numerical Predictors") +
   theme(axis.text = element_text(size = 6))
 ```
-\
+  
 Although in a multiple linear regression one is ultimately interested in *conditional* dependencies, the individual correlation coefficients can still give us some hint as to which predictors might be important:
 
 - The month and year the house was sold (`Mo.Sold`, `Yr.Sold`) are virtually irrelevant for the price.
@@ -525,7 +534,7 @@ ames_train %>% group_by(House.Style) %>% summarize(
   cor(log(X2nd.Flr.SF), log(area))
 ) %>% kable(digits = 2) %>% kable_styling("striped")
 ```
-\
+  
 General Note: any feature that does not appear to be important on its own, can still bring in some predictive value if taken in combination with other variables (when all else is being held fixed). It is important then to ensure that one does not "fit the noise" in the data (that is, to minimize overfitting the training sample).
 
 * * *
@@ -555,7 +564,7 @@ summary(initial.lm)
 # Visually display coefficients with 95 CI, using dot-whiskers plot
 dwplot(initial.lm) + geom_vline(xintercept = 0, lty = 2)
 ```
-\
+  
 *Discussion*: All chosen variables appear to be important predictors, with significant coefficients (low p-values, for at least one level of categorical predictors). The numerical predictors are all positively related to price. For instance, for each additional point in `Overall.Qual`, one expects the price to be higher by $\exp(0.07) = 1.07$, that is to raise by about 7% on average, all else being equal. Similarly, for 10% increase in above grade living `area`, the predicted price is expected to raise by roughly $(1.1^{0.0372} - 1) * 100 = 3.6\%$. Analogously, the newer houses are more valuable, etc. 
 
 The coefficients for categorical predictors show the relative change in average `log(price)` with respect to reference level, all else being held fixed. Thus, any additional fireplace or car in the garage consecutively increases the average expected price by the respective amount. The model predicts lower price on average for any quality of the material on the exterior, below the "Excellent", and so on.
@@ -615,7 +624,7 @@ plot(initial.bas, which = 4, ask = FALSE, caption = "", sub.caption = "",
      # show only one level of each factor (same PIP)
      subset = variables, names = names(variables))
 ```
-\
+  
 I have chosen an uninformative flat reference prior on coefficients (calculated using `BIC` method), that results in fairly conservative estimates (in contrast to less restrictive approaches, such as `JZS` or `AIC` prior). All of the chosen predictors turn out to be important, with $p(\beta_j\neq 0) > 0.5$ nearly equal 1.
 
 One can compare relative plausibility of different models, using calculated `PostProbs` (their ratio then reduces to Bayes factors for our uniform prior distribution). The resulting model space and content is visualized graphically, where each color corresponds to the log posterior odds (over the null model):
@@ -624,7 +633,7 @@ One can compare relative plausibility of different models, using calculated `Pos
 # I have silently modified plot.bas() and image.bas() to customize variable names
 image(initial.bas, cex.axis = 1, rotate = FALSE, subset = variables, names = names(variables))
 ```
-\
+  
 Given our choice of priors, the single best model is the full initial model, including all 10 variables, according to either Highest Probability Model (optimal w.r.t. 0-1 loss), Median Probability Model (pips > 0.5), or the Best Predictive Model (whose predictions are closest to that of BMA). We can compare the `BAS` results with the stepwise model selection, using "information criteria".
 
 ```{r}
@@ -632,7 +641,7 @@ n <- nrow(d_initial)
 # Backward elimination using BIC, rather than AIC, penalized -2*log(average likelihood) + k
 step_initial.lm <- step(initial.lm, k = log(n), trace = TRUE)
 ```
-\
+  
 In contrast to BMA, the backward elimination strategy does not scan through all possible combinations of predictors and, hence, it can miss the model with the better score. Here, elimination of any variable leads to higher ("worse") BIC value, so one arrives at the same model as `BAS` results. (As an alternative, the hybrid selection method alternates between elimination and inclusion of variables.)
 
 * * *
@@ -714,13 +723,13 @@ draw_scatter(
   )
 ) 
 ```
-\
+  
 Notice that an observation can only be unexpected or influential in light of a particular model. Assuming the residuals come from a Gaussian distribution, identify up to 4 potential outliers in a dataset:
 
 ```{r}
 EnvStats::rosnerTest( d_norm.aug$initial.resid, k = 4 )$all.stats 
 ```
-\
+  
 We can inspect these observations, having the highest squared residuals, to find anything unusual about them. For instance, the most extreme outlier is seriously overpriced for its area and lot size. It can partially be explained by its location in `Neighborhood = "IDOTRR"` (i.e.,	"Iowa DOT and Rail Road"), but even more illuminating, it may actually be a "barn" building with `Roof.Style == "Gambrel"` (cf. the [codebook](http://jse.amstat.org/v19n3/decock/DataDocumentation.txt)).
 
 ```{r, class.source = "fold-hide"}
@@ -728,13 +737,13 @@ out_idx <- sort.int( d_norm.aug$initial.resid ^ 2, decreasing = TRUE, index.retu
 d_norm.aug %>% tibble::rownames_to_column(var = "idx") %>% slice(out_idx) %>% 
   kable() %>% kable_styling("striped") %>% scroll_box(width = "100%")
 ```
-\
+  
 Are these points *influential and / or have high leverage?* From the following plot one can see that outliers are well within the main cloud of points (low leverage) and have low influence on predictions. Cook’s distance measures the effect of deleting a point on the combined parameter vector.
 
 ```{r}
 plot(initial.lm, which = 5, id.n = 2)
 ```
-\
+  
 **Bonus discussion**: The assumption of the normal distribution of errors makes the model more easily surprised by rare observations. Were the data contaminated by *highly influential* outliers, one could employ some kind of "robust regression" instead (e.g., replacing the Gaussian error with Student's t-distribution with thicker tails). I have tried this approach using `MASS::rlm()` (with either default method, or custom [psi.t](https://stats.stackexchange.com/questions/117980/regression-with-t-distributed-errors-and-massrlm) settings). Although the residuals now are distributed in accord with the new assumption, the performance of the model is worse on both training and test datasets. 
 
 There is a theoretical reason for this effectiveness of ordinary least squares. According to [the Gauss-Markov theorem](https://en.wikipedia.org/wiki/Gauss%E2%80%93Markov_theorem), one "cannot do better than OLS" within the class of linear unbiased estimators, assuming the errors are uncorrelated, have equal variances and expectation value of zero. Notice that these conditions do not imply normality. Therefore, since outliers do not present the problem in our case, I will stick with the ordinary linear regression, that gives better results.
@@ -757,7 +766,7 @@ d_norm.aug %>% mutate(y_bar = mean(price)) %>%
     Rsq = 1 - RMSE ^ 2 / mean( (price - y_bar) ^ 2 )
   ) %>% kable(digits = 4) %>% kable_styling("striped")
 ```
-\
+  
 The initial model has root mean squared error of about 20,473\$, while the variance explained according to R-squared is 92\%.
 
 * * *
@@ -788,7 +797,7 @@ d_test <- ames_test %>% prepare_data(
 cat("Number of observations:", nrow(ames_test), 
     "\nHow many left:", nrow(d_test), "\nAll NA removed:", ! any(is.na(d_test)))
 ```
-\
+  
 Lets test our model on previously unseen data. One way to assess how well a model reflects uncertainty is through *coverage probability*. For example, if assumptions are met, a 95% prediction interval for `log(price)` (colored in grey on the plot) should include the true value roughly 95% of the time.
 
 ```{r initmodel_test, class.source = "fold-hide"}
@@ -803,7 +812,7 @@ ggplot(d_test.aug, aes(x = log(price), y = log(initial.pred))) +
   annotate("text", x = 12, y = 13, size = 5, label = paste("Coverage Probability:", round(cover_prob, 3))) +
   labs(y = "Prediction", title = "Initial Model Performance on the Test Data")
 ```
-\
+  
 It looks like the model generalizes reasonably well. To check for overfitting, one could compare RMSE or $R^2$ for training and test datasets.
 ```{r, class.source = "fold-hide"}
 d_test.aug %>% summarize(
@@ -811,7 +820,7 @@ d_test.aug %>% summarize(
   Rsq = 1 - RMSE ^ 2 / mean( (price - mean(price)) ^ 2 )
 ) %>% kable(digits = 3) %>% kable_styling("striped")
 ```
-\
+  
 The obtained values appear to be close to in-sample results. *Are these differences big or small*, in other words, does the model performance differ significantly between train and test subsets? As with any such claim in statistics, it is not very meaningful to compare two point estimates without providing the accompanying uncertainty. Since the standard error reduces as the sample size grows, for such large data sets as ours, we almost surely will detect the difference, e.g., via usual null-hypothesis significance test (NHST). However, one can test not only to reject the strict zero, but *any* effect size, as well as the finite *range* of values.
 
 **Bonus discussion**: The opposite of NHST is the so called [equivalence testing](https://journals.sagepub.com/eprint/IW7EgmfBewJdICjP9YYX/full) (cf. also [Improving your statistical inferences](https://www.coursera.org/learn/statistical-inferences) on Coursera), where one assumes now that there is an effect (the new null-hypothesis $H_0: |\text{effect}\ d| > \Delta$) and tries to reject it (with a p < 0.05), using two one-sided tests $t=\frac{\mu_1 - \mu_2 - \Delta}{SD_{\text{pooled}}\sqrt{\frac{1}{n_1} + \frac{1}{n_1}}}$ (TOST). The alternative hypothesis is that the effect is anywhere in the equivalence range $H_A:|d|<\Delta$ (meaning that the effect, which is too small to worth attention, is deemed "equivalent to the absence of an effect"). This procedure has certain advantages over the standard NHST:
@@ -847,7 +856,7 @@ Rsq.boot <- boot.stats(sample_test, sample_train, Rsq)
 as.data.frame(mapply(c, RMSE.boot, Rsq.boot, SIMPLIFY = FALSE)) %>% 
   kable(digits = 4) %>% kable_styling("striped") 
 ```
-\
+  
 Notice that the raw mean difference `dm` is well within the `2 * sd2` of the sampling distribution for the training set. The standardized measure of effect size is the Cohen's $d = \frac{\mu_1 - \mu_2}{SD_{\text{pooled}}}$, and the obtained values are typically considered very large in experimental design (cf. the [interpretation](https://rpsychologist.com/cohend/)). Since we want to exclude particularly big drops in model performance, not surprisingly, it is rather easy to fit the equivalence bounds.
 ```{r}
 set.seed(6)
@@ -857,7 +866,7 @@ TOSTtwo.raw(
   verbose = FALSE, plot = TRUE
 )
 ```
-\
+  
 *Interpretation*: Provided we consider differences in $R^2$ less than 0.02 as negligible, the performance of our model is equivalent on the training and test data samples ("no overfitting"), although we can still detect statistically significant non-zero effect. (Similar considerations are valid for RMSE statistic with the mean difference about 1485\$ and the bound as low as 1600\$, say.)
 
 * * *
@@ -888,7 +897,7 @@ final_rhs <- paste(final, collapse = " + ")
 final.lm <- lm(formula = paste("log(price) ~", final_rhs), data = d_norm)
 summary(final.lm)
 ```
-\
+
 It contains all of the variables of the initial model, plus 10 additional ones, 5 of each are interaction terms. Some of the predictors may have low significance in the presence of interactions, but it is important to include these "main effects" as well (the `BAS` option `force.heredity = TRUE` ensures such hierarchy rules).
 
 * * *
@@ -946,7 +955,7 @@ grid.arrange(
   )
 )
 ```
-\
+
 Note that the peak in price for medium condition houses is explained by the large number of more expensive recently built "average" houses. The accompanying plot against `Year.Built` illuminates how old houses split in price, according to `Overall.Cond`, that can compensate for the age of the house.
 
 
@@ -971,7 +980,7 @@ step_final.lm <- step(
 )
 step_final.lm
 ```
-\
+  
 None of the initial model variables has been removed. To get the final model of at most 20 variables, including interactions, I have eliminated 4 terms without substantial impact on performance (3 interactions and 1 predictor `log_BsmtFin.SF.1`, that seems to me redundant with respect to `log_Total.Bsmt.SF`). At last, confirm that the selected model is indeed the best one according to BMA (HPM = MPM = BPM).
 
 ```{r, class.source = "fold-hide"}
@@ -1020,7 +1029,7 @@ ggplot(d_test.aug, aes(x = log(price), y = log(final.pred))) +
   annotate("text", x = 12, y = 13, size = 5, label = paste("Coverage Probability:", round(cover_prob, 3))) +
   labs(y = "Prediction", title = "Final Model Performance on the Test Data")
 ```
-\
+  
 The final model performance on the test set is as follows:
 ```{r, class.source = "fold-hide"}
 d_test.aug %>% summarize(
@@ -1028,7 +1037,7 @@ d_test.aug %>% summarize(
   Rsq = 1 - RMSE ^ 2 / mean( (price - mean(price)) ^ 2 )
 ) %>% kable(digits = 4) %>% kable_styling("striped")
 ```
-\
+  
 Another way how the test data can help in bias-variance tradeoff is through drawing the *learning curves*, that is the error on both the training and test subsets, plotted against the sample size, used for model fitting.
 
 ```{r, class.source = "fold-hide"}
@@ -1052,7 +1061,7 @@ learn_longer <- learn %>% rename(batch = s, train = train.RMSE, test = test.RMSE
   pivot_longer(cols = 2:3, names_to = "sample", values_to = "RMSE")
 ggplot(learn_longer, aes(x = batch, y = RMSE, col = sample)) + geom_line(size = 1.2)
 ```
-\
+
 As the model learns from data, the two errors converge and more-or-less level-off after 400 sample points, with the gap being around 1000\$ ("low variance"). This means, adding more data is unlikely to improve the fit. (In fact, the training error might even decrease a bit, as the model learns more from the sample.) In order to further reduce the error one should use more complex models (higher variance), that in turn may result in poorer generalizability (higher train-test gap).
 
 * * *
@@ -1096,13 +1105,13 @@ resid_fitted <- ggplot(d_resid, aes(x = fit, y = resid)) +
   labs(title = "Residuals vs. Fitted", x = "Fitted Values", y = "Absolute Values of Residuals")
 grid.arrange(resid_hist, resid_qqnorm, resid_fitted, ncol = 3)
 ```
-\
+
 Although the outliers are not as extreme as in the initial model, one can see from the next plot, that the point 610 has higher leverage and is more influential now. This is probably due to inclusion of `MS.Zoning`, where only 5 observations are also classified as "Commercial".
 
 ```{r, class.source = "fold-hide"}
 plot(final.lm, which = 5, id.n = 2)
 ```
-\
+
 The observation 471 has been identified to have leverage 1, so that $\hat{y}_i = y_i$. This is peculiar, meaning that only observation itself influences its own prediction, all the other observations being irrelevant for this point. This is also maybe due to the inclusion of factors with multiple levels (making this observation an isolated point "one of the kind").
 
 * * *
@@ -1122,7 +1131,7 @@ d_norm.aug %>% mutate(final = final.pred, initial = initial.pred, y_bar = mean(p
     Rsq = 1 - RMSE ^ 2 / mean( (price - y_bar) ^ 2 )
   ) %>% kable(digits = 4) %>% kable_styling("striped")
 ```
-\
+
 The final model has lower RMSE and higher $R^2$ than our initial guess. The change is significantly different from zero (not surprisingly, given the small standard error and high statistical power) and is also consistent with the assumption that the difference is large (failed to reject $\Delta R^2 > 0.02$ in the TOST procedure for two models on the same training set).
 ```{r, class.source = "fold-hide"}
 set.seed(6)
@@ -1179,7 +1188,7 @@ d_val <- ames_validation %>% prepare_data(
 cat("Number of observations:", nrow(ames_validation), 
     "\nHow many left:", nrow(d_val), "\nAll NA removed:", ! any(is.na(d_val)))
 ```
-\
+
 About 93\% of the 95\% prediction intervals contain the true price of the house in the validation set, slightly less than expected, but still reflects uncertainty well.
 
 ```{r final_model_validation, class.source = "fold-hide"}
@@ -1194,7 +1203,7 @@ ggplot(d_val.aug, aes(x = log(price), y = log(pred))) +
   annotate("text", x = 12, y = 13, size = 5, label = paste("Coverage Probability:", round(cover_prob, 3))) +
   labs(y = "Prediction", title = "Final Model Performance on the Validation Data")
 ```
-\
+
 Two houses have been somewhat overvalued by our final model:
 ```{r}
 EnvStats::rosnerTest( d_val.aug$resid )$all.stats
@@ -1203,7 +1212,7 @@ EnvStats::rosnerTest( d_val.aug$resid )$all.stats
 d_val.aug %>% tibble::rownames_to_column(var = "idx") %>% arrange(desc(resid ^ 2)) %>% head(3) %>% 
   kable() %>% kable_styling("striped") %>% scroll_box(width = "100%")
 ```
-\
+
 The accuracy of prediction, as measured by RMSE or $R^2$, is also a little bit lower than previously calculated using test or train data:
 
 ```{r, class.source = "fold-hide"}
@@ -1212,7 +1221,7 @@ d_val.aug %>% summarize(
   Rsq = 1 - RMSE ^ 2 / mean( (price - mean(price)) ^ 2 )
 ) %>% kable(digits = 4) %>% kable_styling("striped")
 ```
-\
+
 Should we be alarmed by this difference in performance? For instance, if one takes the test RMSE as an estimate of the "true" error rate, the results are well within the natural sampling variability (`|dm| < sd2`, so that one is likely to pass the equivalence test with a very mild $\Delta$).
 
 ```{r, class.source = "fold-hide"}
@@ -1221,7 +1230,7 @@ sample_test_final <- d_test.aug %>% mutate(pred = final.pred)
 RMSE.boot <- boot.stats(d_val.aug, sample_test_final, RMSE)
 as.data.frame(RMSE.boot) %>% kable(digits = 4) %>% kable_styling("striped") 
 ```
-\
+
 On the other hand, the difference between validation and training set $R^2$ scores is expectedly larger, but is still reliably within our conjectured 2\% bound.
 ```{r, class.source = "fold-hide"}
 set.seed(6)
