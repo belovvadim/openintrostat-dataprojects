@@ -37,11 +37,7 @@ Transform variables according to guidelines, describe dataset and
 perform EDA. Develop a Bayesian regression model to predict
 `audience_score` from the selected variables. Make a prediction for a
 previously unseen data (cf. [project
-<<<<<<< HEAD
 requirements](https://github.com/belovvadim/openintrostat-dataprojects/blob/main/requirements/info4_bayesian.md)).
-=======
-requirements](https://github.com/belovvadim/openintrostat-dataprojects/blob/main/requirements/info4_bayesian)).
->>>>>>> e52aa905ef579c3e829c745f73239c19e671d57c
 
 ### Load packages
 
@@ -1193,39 +1189,22 @@ round(summary(movies.BIC, n.models = 4), 3)
     ##                     P(B != 0 | Y)   model 1   model 2   model 3   model 4
     ## Intercept                   1.000     1.000     1.000     1.000     1.000
     ## critics_score               1.000     1.000     1.000     1.000     1.000
-<<<<<<< HEAD
     ## thtr_rel_year               0.871     1.000     0.000     1.000     1.000
-    ## best_pic_nomyes             0.140     0.000     0.000     1.000     0.000
-    ## best_pic_winyes             0.042     0.000     0.000     0.000     0.000
-    ## best_actor_winyes           0.091     0.000     0.000     0.000     1.000
-    ## best_actress_winyes         0.086     0.000     0.000     0.000     0.000
-    ## best_dir_winyes             0.066     0.000     0.000     0.000     0.000
-    ## top200_boxyes               0.042     0.000     0.000     0.000     0.000
-    ## feature_filmyes             1.000     1.000     1.000     1.000     1.000
-    ## dramayes                    0.897     1.000     1.000     1.000     1.000
-    ## mpaa_rating_Ryes            0.039     0.000     0.000     0.000     0.000
-=======
-    ## thtr_rel_year               0.870     1.000     0.000     1.000     1.000
-    ## best_pic_nomyes             0.140     0.000     0.000     1.000     0.000
+    ## best_pic_nomyes             0.139     0.000     0.000     1.000     0.000
     ## best_pic_winyes             0.041     0.000     0.000     0.000     0.000
-    ## best_actor_winyes           0.089     0.000     0.000     0.000     1.000
-    ## best_actress_winyes         0.086     0.000     0.000     0.000     0.000
+    ## best_actor_winyes           0.090     0.000     0.000     0.000     1.000
+    ## best_actress_winyes         0.087     0.000     0.000     0.000     0.000
     ## best_dir_winyes             0.065     0.000     0.000     0.000     0.000
     ## top200_boxyes               0.042     0.000     0.000     0.000     0.000
     ## feature_filmyes             1.000     1.000     1.000     1.000     1.000
     ## dramayes                    0.897     1.000     1.000     1.000     1.000
     ## mpaa_rating_Ryes            0.038     0.000     0.000     0.000     0.000
->>>>>>> e52aa905ef579c3e829c745f73239c19e671d57c
     ## oscar_seasonyes             0.039     0.000     0.000     0.000     0.000
     ## summer_seasonyes            0.065     0.000     0.000     0.000     0.000
     ## log_votes                   1.000     1.000     1.000     1.000     1.000
     ## `1/runtime`                 0.044     0.000     0.000     0.000     0.000
     ## BF                             NA     1.000     0.133     0.132     0.102
-<<<<<<< HEAD
-    ## PostProbs                      NA     0.404     0.054     0.054     0.042
-=======
-    ## PostProbs                      NA     0.407     0.055     0.054     0.041
->>>>>>> e52aa905ef579c3e829c745f73239c19e671d57c
+    ## PostProbs                      NA     0.406     0.054     0.053     0.042
     ## R2                             NA     0.552     0.545     0.554     0.554
     ## dim                            NA     6.000     5.000     7.000     7.000
     ## logmarg                        NA -3811.616 -3813.631 -3813.644 -3813.897
@@ -1332,11 +1311,7 @@ hpm <- which.max(movies.BIC$postprobs)
 round(movies.BIC$postprobs[[hpm]], 3)
 ```
 
-<<<<<<< HEAD
-    ## [1] 0.405
-=======
-    ## [1] 0.407
->>>>>>> e52aa905ef579c3e829c745f73239c19e671d57c
+    ## [1] 0.406
 
 ### Model Interpretation and Diagnostics
 
