@@ -47,7 +47,7 @@ Some code chunks are hidden by default in the HTML version (mostly for plotting)
 
 ### Task
 
-Transform variables according to guidelines, describe dataset and perform EDA. Develop a Bayesian regression model to predict `audience_score` from the selected variables. Make a prediction for a previously unseen data (cf. [project requirements](https://github.com/belovvadim/openintrostat-dataprojects/blob/main/requirements/info4_bayesian)).
+Transform variables according to guidelines, describe dataset and perform EDA. Develop a Bayesian regression model to predict `audience_score` from the selected variables. Make a prediction for a previously unseen data (cf. [project requirements](https://github.com/belovvadim/openintrostat-dataprojects/blob/main/requirements/info4_bayesian.md)).
 
 ### Load packages
 
