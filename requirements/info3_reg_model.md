@@ -26,7 +26,7 @@ Your project will consist of 6 parts:
 
 - **Conclusion:** (3 points) A brief summary of your findings from the previous sections without repeating your statements from earlier as well as a discussion of what you have learned about the data and your research question. You should also discuss any shortcomings of your current study (either due to data collection or methodology) and include ideas for possible future research.
 
-In addition to these parts, there are also 6 points allocated to format, overall organization, and readability of your project. Total points add up to 50 points. See the [assessment rubric](https://d3c33hcgiwev3.cloudfront.net/_e57696554fbcbc214503864e8755f2a1_reg_model_project_rubric.html?Expires=1642032000&Signature=hfy0gkZvwzHNkjTLQhpi5nY3g6vt0Zo3h10zroLLMk3T4bCZ0hT4mBDAg6v8bczXuKq6OeOCfU7R~dvXNdSydgR-Wz4UQ1YRz-x6fHm2a2YhmjcWAspZQoJP1dhiCygljyJpYsWnHnqx7waaopJZsj0t~3ZOUNFvWuYYsaKhmHw_&Key-Pair-Id=APKAJLTNE6QMUY6HBC5A) for more details on how your peers will evaluate your work.
+In addition to these parts, there are also 6 points allocated to format, overall organization, and readability of your project. Total points add up to 50 points. See the assessment rubric for more details on how your peers will evaluate your work.
 
 ### More information on the data
 

@@ -16,7 +16,7 @@ Your project will consist of 4 parts:
 
 4. **Inference:** (28 points) Perform inference that addresses the research question you outlined above. Each R output and plot should be accompanied by a brief interpretation.
 
-In addition to these parts, there are also 6 points allocated to format, overall organization, and readability of your project. Total points add up to 50 points. See the [assessment rubric](https://d3c33hcgiwev3.cloudfront.net/_c130de4ce4e6675cb5488a51e07c99bd_stat_inf_project_rubric.html?Expires=1642032000&Signature=UmQzYEVHq07D-CpnbK12m4BGY7ZwMUf~zKi8OH8w0c3LAZ2-TcLj7NnrB9WW1eP3KpTOezkFMeK2gJ4h74pLvhQAu-BvkDova7E2YoRgSry0hjR9zzIWmPykBouIDX7qZHSRtxl083C-iqOKOMK1QWQJp6X5Ni1sXnSFMyz5eSw_&Key-Pair-Id=APKAJLTNE6QMUY6HBC5A) for more details on how your peers will evaluate your work.
+In addition to these parts, there are also 6 points allocated to format, overall organization, and readability of your project. Total points add up to 50 points. See the assessment rubric for more details on how your peers will evaluate your work.
 
 
 ### More information on inference

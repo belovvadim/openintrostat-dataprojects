@@ -14,7 +14,7 @@ Your project will consist of 3 parts:
 
 3. **EDA:** (30 points) Perform exploratory data analysis (EDA) that addresses each of the three research questions you outlined above. Your EDA should contain numerical summaries and visualizations. Each R output and plot should be accompanied by a brief interpretation.
 
-In addition to these parts, there are also 6 points allocated to format, overall organization, and readability of your project. Total points add up to 50 points. See the [assessment rubric](https://d3c33hcgiwev3.cloudfront.net/_5ac624363f7b9d27d8ae8a78ffd2e8b0_intro_data_prob_project_rubric.html?Expires=1642032000&Signature=Uzb622zXnM0mFTXMwsnbT5IH81s~QUGnM2fC7SATVw3yzdGAZVFnVOrzWJoRx7TVKsiIxoVr-dKZHB7fInPWFCh2Xfvt3BlAiq7wiYu6sdhvLo1LcHdSpiVv8nJN2j2cM3LKIunL8fdbUY9jp0FPntgBywCvZ7opbWF7Qvhnv-I_&Key-Pair-Id=APKAJLTNE6QMUY6HBC5A) for more details on how your peers will evaluate your work.
+In addition to these parts, there are also 6 points allocated to format, overall organization, and readability of your project. Total points add up to 50 points. See the assessment rubric for more details on how your peers will evaluate your work.
 
 ### More information on the data
 

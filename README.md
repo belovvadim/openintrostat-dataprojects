@@ -1,6 +1,6 @@
 # openintrostat-dataprojects
 
-This repo contains 5 open-ended data analysis projects for [Statistics with R Specialization](https://www.coursera.org/specializations/statistics) on Coursera, written in RMarkdown. The `requirements` are bound to course contents, but otherwise they encourage creativity in data exploration and modeling to show mastery of taught concepts and tools.
+This repo contains 5 open-ended data analysis projects for [Statistics with R Specialization](https://www.coursera.org/specializations/statistics) on Coursera, written in RMarkdown. The `requirements` are bound to course contents and assessment rubrics, but otherwise they encourage creativity in data exploration and modeling to show mastery of taught concepts and tools.
 
 1. Introduction to Probability and Data with R
     - [EDA: 3 Questions to BRFSS Data](https://github.com/belovvadim/openintrostat-dataprojects/blob/main/project1_intro_data_prob.md)

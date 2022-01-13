@@ -74,7 +74,7 @@ Your project will consist of 6 parts:
  repeating your statements from earlier as well as a discussion of what you have learned about the data and your research question. You should also discuss any shortcomings of your current study (either due to data 
 collection or methodology) and include ideas for possible future research.
 
-In addition to these parts, there are also 6 points allocated to format, overall organization, and readability of your project. Total points add up to 50 points. See the [assessment rubric](https://statswithr.github.io/projects/04_bayesian/bayesian_project_rubric.Rmd) for more details on how your peers will evaluate your work.
+In addition to these parts, there are also 6 points allocated to format, overall organization, and readability of your project. Total points add up to 50 points. See the assessment rubric for more details on how your peers will evaluate your work.
 
 ### More information on the data
 
